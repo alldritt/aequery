@@ -107,9 +107,13 @@ aequery '/Finder/windows/name'
 aequery '/Contacts/people/emails/value' --flatten --unique
 # ["address1@domain.com", "address2@domain.com", ...]
 
-# JSON list of subjects of all emails from a sender, flattened to a list
-aequery '/Contacts/people/emails/value' --flatten --unique
+# JSON list of all Mail messages received from "apple.com", flattened to a list
+aequery '/Mail/account/mailboxes/message[sender ends "apple.com"]' --flatten
 # ["address1@domain.com", "address2@domain.com", ...]
+
+# JSON list of subjects of all emails from a sender, flattened to a list
+aequery '/Mail/account/mailboxes/message[sender = "sender@comain.com"]/subject' --flatten
+# ["subject string", ...]
 
 # Plain text output
 aequery --text '/Finder/desktop/name'
@@ -120,6 +124,9 @@ aequery --verbose --dry-run '/TextEdit/documents[1]/paragraphs'
 
 # First window name
 aequery --text '/Finder/windows[1]/name'
+
+# Last window name
+aequery --text '/Finder/windows[-1]/name'
 
 # Show SDEF definition for the window class
 aequery --sdef '/Finder/windows'

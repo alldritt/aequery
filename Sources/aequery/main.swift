@@ -43,6 +43,9 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Find all valid paths from the application root to the target")
     var findPaths: Bool = false
 
+    @Option(name: .long, help: "Apple Event timeout in seconds (default 120, -1 for no timeout)")
+    var timeout: Int = 120
+
     var outputFormat: OutputFormat {
         text ? .text : .json
     }
@@ -128,7 +131,7 @@ struct AEQueryCommand: ParsableCommand {
 
         // 6. Send
         let sender = AppleEventSender()
-        let reply = try sender.sendGetEvent(to: query.appName, specifier: specifier)
+        let reply = try sender.sendGetEvent(to: query.appName, specifier: specifier, timeoutSeconds: timeout)
 
         // 7. Decode
         let decoder = DescriptorDecoder()

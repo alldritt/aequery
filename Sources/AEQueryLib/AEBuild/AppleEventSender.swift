@@ -4,7 +4,8 @@ public struct AppleEventSender {
     public init() {}
 
     /// Send a 'get' Apple Event for the given object specifier to the target app.
-    public func sendGetEvent(to appName: String, specifier: NSAppleEventDescriptor) throws -> NSAppleEventDescriptor {
+    /// - Parameter timeoutSeconds: Timeout in seconds (default 120). Use -1 for no timeout, -2 for system default.
+    public func sendGetEvent(to appName: String, specifier: NSAppleEventDescriptor, timeoutSeconds: Int = 120) throws -> NSAppleEventDescriptor {
         let bundleID = try resolveBundleIdentifier(appName)
         let targetApp = NSAppleEventDescriptor(bundleIdentifier: bundleID)
 
@@ -25,7 +26,8 @@ public struct AppleEventSender {
         var replyEvent = AppleEvent()
         let aeDesc = event.aeDesc!.pointee
         var mutableDesc = aeDesc
-        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), 30 * 60)
+        let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
+        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
         guard err == noErr else {
             throw AEQueryError.appleEventFailed(Int(err), "AESendMessage failed with OSStatus \(err)")
         }
