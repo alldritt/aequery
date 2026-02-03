@@ -189,4 +189,17 @@ extension AEValue {
         }
         return .list(flat)
     }
+
+    public func uniqued() -> AEValue {
+        guard case .list(let items) = self else { return self }
+        var seen: [AEValue] = []
+        var result: [AEValue] = []
+        for item in items {
+            if !seen.contains(item) {
+                seen.append(item)
+                result.append(item)
+            }
+        }
+        return .list(result)
+    }
 }

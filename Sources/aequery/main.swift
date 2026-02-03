@@ -28,6 +28,9 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Flatten nested lists into a single list")
     var flatten: Bool = false
 
+    @Flag(name: .long, help: "Remove duplicate values from the result list (use with --flatten)")
+    var unique: Bool = false
+
     @Flag(name: .long, help: "Show verbose debug output on stderr")
     var verbose: Bool = false
 
@@ -133,6 +136,9 @@ struct AEQueryCommand: ParsableCommand {
 
         // 7a. Flatten if requested
         if flatten { value = value.flattened() }
+
+        // 7b. Deduplicate if requested
+        if unique { value = value.uniqued() }
 
         // 8. Format and output
         if applescript || chevron {

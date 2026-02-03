@@ -11,7 +11,7 @@ swift build
 ## Usage
 
 ```
-aequery [--json | --text | --applescript | --chevron] [--flatten] [--verbose] [--dry-run] [--sdef] [--find-paths] '<expression>'
+aequery [--json | --text | --applescript | --chevron] [--flatten] [--unique] [--verbose] [--dry-run] [--sdef] [--find-paths] '<expression>'
 ```
 
 ### Flags
@@ -23,6 +23,7 @@ aequery [--json | --text | --applescript | --chevron] [--flatten] [--verbose] [-
 | `--applescript` | Output as AppleScript using SDEF terminology |
 | `--chevron` | Output as AppleScript using `«class xxxx»` chevron syntax |
 | `--flatten` | Flatten nested lists into a single list |
+| `--unique` | Remove duplicate values from the result list (use with `--flatten`) |
 | `--verbose` | Show tokens, AST, and resolved steps on stderr |
 | `--dry-run` | Parse and resolve only, do not send Apple Events |
 | `--sdef` | Print the SDEF definition for the resolved element or property |
@@ -102,6 +103,14 @@ aequery '/Finder/windows[1][@name="Desktop"]'
 aequery '/Finder/windows/name'
 # ["AICanvas", "Documents"]
 
+# JSON list of all email addresses in Contacts, flattened to a unique list
+aequery '/Contacts/people/emails/value' --flatten --unique
+# ["address1@domain.com", "address2@domain.com", ...]
+
+# JSON list of subjects of all emails from a sender, flattened to a list
+aequery '/Contacts/people/emails/value' --flatten --unique
+# ["address1@domain.com", "address2@domain.com", ...]
+
 # Plain text output
 aequery --text '/Finder/desktop/name'
 # Desktop
@@ -118,8 +127,11 @@ aequery --sdef '/Finder/windows'
 # Show SDEF definition for the name property
 aequery --sdef '/Finder/windows/name'
 
-# Flatten nested lists (e.g. name of every window of every space)
-aequery --flatten '/Finder/windows/name'
+# Flatten nested lists (e.g. name of every file in every folder)
+aequery --flatten '/Finder/folders/files/name'
+
+# Flatten and remove duplicates
+aequery --flatten --unique '/Finder/folders/files/name'
 
 # AppleScript terminology output
 aequery --applescript '/Finder/windows'
@@ -168,7 +180,7 @@ Sources/
 swift test
 ```
 
-94 tests across 8 suites covering the lexer, parser, SDEF parsing, resolver, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
+132 tests across 10 suites covering the lexer, parser, SDEF parsing, resolver, path finder, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
 
 ## Requirements
 
