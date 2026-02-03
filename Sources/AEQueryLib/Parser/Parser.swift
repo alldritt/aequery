@@ -157,6 +157,14 @@ public struct Parser {
             }
             return .byName(s)
 
+        case .middle:
+            advance()
+            return .byOrdinal(.middle)
+
+        case .some:
+            advance()
+            return .byOrdinal(.some)
+
         case .name(_):
             // Could be a whose clause: path compOp value
             let path = try parsePath()

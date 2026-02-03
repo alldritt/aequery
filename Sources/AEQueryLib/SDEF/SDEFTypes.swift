@@ -74,6 +74,16 @@ public struct ScriptingDictionary {
     public func findEnumeration(_ name: String) -> EnumDef? {
         enumerations[name.lowercased()]
     }
+
+    /// Find a class definition by its four-character code
+    public func findClassByCode(_ code: String) -> ClassDef? {
+        classes.values.first { $0.code == code }
+    }
+
+    /// Find a property definition by its four-character code within a given class (including inherited properties)
+    public func findPropertyByCode(_ code: String, inClass classDef: ClassDef) -> PropertyDef? {
+        allProperties(for: classDef).first { $0.code == code }
+    }
 }
 
 public struct ClassDef: Equatable {

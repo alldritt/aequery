@@ -19,6 +19,15 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Output as plain text")
     var text: Bool = false
 
+    @Flag(name: .long, help: "Output as AppleScript using terminology")
+    var applescript: Bool = false
+
+    @Flag(name: .long, help: "Output as AppleScript using chevron syntax")
+    var chevron: Bool = false
+
+    @Flag(name: .long, help: "Flatten nested lists into a single list")
+    var flatten: Bool = false
+
     @Flag(name: .long, help: "Show verbose debug output on stderr")
     var verbose: Bool = false
 
@@ -79,7 +88,7 @@ struct AEQueryCommand: ParsableCommand {
         }
 
         // 5. Build specifier
-        let builder = ObjectSpecifierBuilder()
+        let builder = ObjectSpecifierBuilder(dictionary: dictionary)
         let specifier = builder.buildSpecifier(from: resolved)
 
         if verbose {
@@ -92,12 +101,21 @@ struct AEQueryCommand: ParsableCommand {
 
         // 7. Decode
         let decoder = DescriptorDecoder()
-        let value = decoder.decode(reply)
+        var value = decoder.decode(reply)
+
+        // 7a. Flatten if requested
+        if flatten { value = value.flattened() }
 
         // 8. Format and output
-        let formatter = OutputFormatter(format: outputFormat)
-        let output = formatter.format(value)
-        print(output)
+        if applescript || chevron {
+            let style: AppleScriptFormatter.Style = applescript ? .terminology : .chevron
+            let asFormatter = AppleScriptFormatter(style: style, dictionary: dictionary, appName: query.appName)
+            print(asFormatter.format(value))
+        } else {
+            let formatter = OutputFormatter(format: outputFormat, dictionary: dictionary, appName: query.appName)
+            let output = formatter.format(value)
+            print(output)
+        }
     }
 }
 

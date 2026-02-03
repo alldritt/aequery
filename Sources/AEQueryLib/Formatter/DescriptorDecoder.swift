@@ -8,6 +8,7 @@ public enum AEValue: Equatable {
     case date(Date)
     case list([AEValue])
     case record([(String, AEValue)])
+    indirect case objectSpecifier(want: String, form: String, seld: AEValue, from: AEValue)
     case null
 
     public static func == (lhs: AEValue, rhs: AEValue) -> Bool {
@@ -22,6 +23,9 @@ public enum AEValue: Equatable {
         case (.record(let a), .record(let b)):
             guard a.count == b.count else { return false }
             return zip(a, b).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
+        case (.objectSpecifier(let w1, let f1, let s1, let fr1),
+              .objectSpecifier(let w2, let f2, let s2, let fr2)):
+            return w1 == w2 && f1 == f2 && s1 == s2 && fr1 == fr2
         default: return false
         }
     }
@@ -119,6 +123,18 @@ public struct DescriptorDecoder {
             }
             return .record(pairs)
 
+        // Object Specifier
+        case typeObjectSpecifier:
+            let wantDesc = descriptor.forKeyword(AEKeyword(AEConstants.keyAEDesiredClass))
+            let formDesc = descriptor.forKeyword(AEKeyword(AEConstants.keyAEKeyForm))
+            let seldDesc = descriptor.forKeyword(AEKeyword(AEConstants.keyAEKeyData))
+            let fromDesc = descriptor.forKeyword(AEKeyword(AEConstants.keyAEContainer))
+            let want = wantDesc.map { FourCharCode($0.typeCodeValue).stringValue } ?? "????"
+            let form = formDesc.map { FourCharCode($0.typeCodeValue).stringValue } ?? "????"
+            let seld = seldDesc.map { decode($0) } ?? .null
+            let from = fromDesc.map { decode($0) } ?? .null
+            return .objectSpecifier(want: want, form: form, seld: seld, from: from)
+
         // Type/Enum
         case typeType, typeEnumerated:
             let val = descriptor.typeCodeValue
@@ -156,3 +172,21 @@ private let typeAEList: UInt32 = 0x6C697374     // 'list'
 private let typeAERecord: UInt32 = 0x7265636F   // 'reco'
 private let typeType: UInt32 = 0x74797065       // 'type'
 private let typeEnumerated: UInt32 = 0x656E756D // 'enum'
+private let typeObjectSpecifier: UInt32 = 0x6F626A20 // 'obj '
+
+extension AEValue {
+    public func flattened() -> AEValue {
+        guard case .list(let items) = self else { return self }
+        var flat: [AEValue] = []
+        for item in items {
+            if case .list = item {
+                if case .list(let nested) = item.flattened() {
+                    flat.append(contentsOf: nested)
+                }
+            } else {
+                flat.append(item)
+            }
+        }
+        return .list(flat)
+    }
+}

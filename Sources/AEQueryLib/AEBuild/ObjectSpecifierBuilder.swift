@@ -1,7 +1,11 @@
 import Foundation
 
 public struct ObjectSpecifierBuilder {
-    public init() {}
+    private let dictionary: ScriptingDictionary?
+
+    public init(dictionary: ScriptingDictionary? = nil) {
+        self.dictionary = dictionary
+    }
 
     /// Build a complete object specifier chain from resolved steps.
     /// The chain is built innermost-first: application → first step → ... → last step.
@@ -93,6 +97,8 @@ public struct ObjectSpecifierBuilder {
             return buildByName(wantCode: fourCC, name: name, container: container)
         case .byID(let value):
             return buildByID(wantCode: fourCC, value: value, container: container)
+        case .byOrdinal(let ordinal):
+            return buildByOrdinal(wantCode: fourCC, ordinal: ordinal, container: container)
         case .byRange(let start, let stop):
             return buildByRange(wantCode: fourCC, start: start, stop: stop, container: container)
         case .test(let testExpr):
@@ -128,6 +134,34 @@ public struct ObjectSpecifierBuilder {
                 forKeyword: AEConstants.keyAEKeyData
             )
         }
+
+        return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
+    }
+
+    // MARK: - By ordinal
+
+    private func buildByOrdinal(wantCode: FourCharCode, ordinal: Ordinal, container: NSAppleEventDescriptor) -> NSAppleEventDescriptor {
+        let specifier = NSAppleEventDescriptor.record()
+
+        specifier.setDescriptor(
+            NSAppleEventDescriptor(typeCode: wantCode),
+            forKeyword: AEConstants.keyAEDesiredClass
+        )
+        specifier.setDescriptor(container, forKeyword: AEConstants.keyAEContainer)
+        specifier.setDescriptor(
+            NSAppleEventDescriptor(enumCode: AEConstants.formAbsolutePosition),
+            forKeyword: AEConstants.keyAEKeyForm
+        )
+
+        let ordinalCode: FourCharCode
+        switch ordinal {
+        case .middle: ordinalCode = AEConstants.kAEMiddle
+        case .some: ordinalCode = AEConstants.kAEAny
+        }
+        var code = ordinalCode
+        let data = Data(bytes: &code, count: 4)
+        let ordinalDesc = NSAppleEventDescriptor(descriptorType: AEConstants.typeAbsoluteOrdinal, data: data)!
+        specifier.setDescriptor(ordinalDesc, forKeyword: AEConstants.keyAEKeyData)
 
         return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
     }
@@ -221,7 +255,7 @@ public struct ObjectSpecifierBuilder {
     // MARK: - By test (whose clause)
 
     private func buildByTest(wantCode: FourCharCode, test: TestExpr, container: NSAppleEventDescriptor) -> NSAppleEventDescriptor {
-        let testDesc = buildTestDescriptor(test)
+        let testDesc = buildTestDescriptor(test, inClassCode: wantCode)
 
         let specifier = NSAppleEventDescriptor.record()
         specifier.setDescriptor(NSAppleEventDescriptor(typeCode: wantCode), forKeyword: AEConstants.keyAEDesiredClass)
@@ -232,14 +266,14 @@ public struct ObjectSpecifierBuilder {
         return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
     }
 
-    private func buildTestDescriptor(_ test: TestExpr) -> NSAppleEventDescriptor {
+    private func buildTestDescriptor(_ test: TestExpr, inClassCode classCode: FourCharCode? = nil) -> NSAppleEventDescriptor {
         let comp = NSAppleEventDescriptor.record()
 
         // obj1 = property specifier using objectBeingExamined as container
         let examContainer = NSAppleEventDescriptor(descriptorType: AEConstants.typeObjectBeingExamined, data: nil)!
         // Build a property specifier for the test path (simplified: just use first element as property name)
         let propName = test.path.first ?? ""
-        let propDesc = buildPropertyRefForTest(name: propName, container: examContainer)
+        let propDesc = buildPropertyRefForTest(name: propName, container: examContainer, inClassCode: classCode)
 
         comp.setDescriptor(propDesc, forKeyword: AEConstants.keyAEObject1)
 
@@ -263,9 +297,7 @@ public struct ObjectSpecifierBuilder {
         return comp.coerce(toDescriptorType: AEConstants.typeCompDescriptor)!
     }
 
-    private func buildPropertyRefForTest(name: String, container: NSAppleEventDescriptor) -> NSAppleEventDescriptor {
-        // Build a simple property specifier — in test context we use the name as a type code
-        // For unresolved test paths, we encode the property name directly
+    private func buildPropertyRefForTest(name: String, container: NSAppleEventDescriptor, inClassCode classCode: FourCharCode? = nil) -> NSAppleEventDescriptor {
         let specifier = NSAppleEventDescriptor.record()
         specifier.setDescriptor(
             NSAppleEventDescriptor(typeCode: AEConstants.formPropertyID),
@@ -276,9 +308,7 @@ public struct ObjectSpecifierBuilder {
             NSAppleEventDescriptor(enumCode: AEConstants.formPropertyID),
             forKeyword: AEConstants.keyAEKeyForm
         )
-        // Use the property name — in a real implementation this would be resolved to a 4CC
-        // For now, encode it as a type code from the name's first 4 chars
-        let code = fourCharCodeFromName(name)
+        let code = resolvePropertyCode(name, inClassCode: classCode)
         specifier.setDescriptor(
             NSAppleEventDescriptor(typeCode: code),
             forKeyword: AEConstants.keyAEKeyData
@@ -286,8 +316,24 @@ public struct ObjectSpecifierBuilder {
         return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
     }
 
-    private func fourCharCodeFromName(_ name: String) -> FourCharCode {
-        // Pad or truncate to exactly 4 ASCII characters
+    private func resolvePropertyCode(_ name: String, inClassCode classCode: FourCharCode? = nil) -> FourCharCode {
+        if let dictionary = dictionary {
+            let lower = name.lowercased()
+            // If we have a class context, look up the property in that class first
+            if let classCode = classCode,
+               let classDef = dictionary.findClassByCode(classCode.stringValue) {
+                if let prop = dictionary.allProperties(for: classDef).first(where: { $0.name.lowercased() == lower }) {
+                    return FourCharCode(prop.code)
+                }
+            }
+            // Search all classes as fallback
+            for classDef in dictionary.classes.values {
+                if let prop = dictionary.allProperties(for: classDef).first(where: { $0.name.lowercased() == lower }) {
+                    return FourCharCode(prop.code)
+                }
+            }
+        }
+        // Last resort: pad or truncate to 4 ASCII characters
         var padded = name.prefix(4).lowercased()
         while padded.count < 4 { padded += " " }
         return FourCharCode(String(padded))
@@ -310,8 +356,8 @@ public struct ObjectSpecifierBuilder {
     // MARK: - Compound test
 
     private func buildByCompoundTest(wantCode: FourCharCode, left: Predicate, boolOp: BoolOp, right: Predicate, container: NSAppleEventDescriptor) -> NSAppleEventDescriptor {
-        let leftDesc = buildPredicateTestDescriptor(left)
-        let rightDesc = buildPredicateTestDescriptor(right)
+        let leftDesc = buildPredicateTestDescriptor(left, inClassCode: wantCode)
+        let rightDesc = buildPredicateTestDescriptor(right, inClassCode: wantCode)
 
         let logicalDesc = NSAppleEventDescriptor.record()
         let logOp: FourCharCode = boolOp == .and ? AEConstants.kAEAND : AEConstants.kAEOR
@@ -336,13 +382,13 @@ public struct ObjectSpecifierBuilder {
         return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
     }
 
-    private func buildPredicateTestDescriptor(_ predicate: Predicate) -> NSAppleEventDescriptor {
+    private func buildPredicateTestDescriptor(_ predicate: Predicate, inClassCode classCode: FourCharCode? = nil) -> NSAppleEventDescriptor {
         switch predicate {
         case .test(let testExpr):
-            return buildTestDescriptor(testExpr)
+            return buildTestDescriptor(testExpr, inClassCode: classCode)
         case .compound(let left, let boolOp, let right):
-            let leftDesc = buildPredicateTestDescriptor(left)
-            let rightDesc = buildPredicateTestDescriptor(right)
+            let leftDesc = buildPredicateTestDescriptor(left, inClassCode: classCode)
+            let rightDesc = buildPredicateTestDescriptor(right, inClassCode: classCode)
             let logicalDesc = NSAppleEventDescriptor.record()
             let logOp: FourCharCode = boolOp == .and ? AEConstants.kAEAND : AEConstants.kAEOR
             logicalDesc.setDescriptor(NSAppleEventDescriptor(enumCode: logOp), forKeyword: AEConstants.keyAELogicalOperator)

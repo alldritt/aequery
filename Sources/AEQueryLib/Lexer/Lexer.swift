@@ -119,7 +119,7 @@ public struct Lexer {
         return Token(kind: .integer(Int(numStr)!), position: start)
     }
 
-    private static let keywords: Set<String> = ["and", "or", "contains", "begins", "ends"]
+    private static let keywords: Set<String> = ["and", "or", "contains", "begins", "ends", "middle", "some"]
 
     private mutating func scanName() -> Token {
         let start = position
@@ -185,6 +185,8 @@ public struct Lexer {
         case "contains": return Token(kind: .contains, position: position)
         case "begins": return Token(kind: .begins, position: position)
         case "ends": return Token(kind: .ends, position: position)
+        case "middle": return Token(kind: .middle, position: position)
+        case "some": return Token(kind: .some, position: position)
         default: return Token(kind: .name(keyword), position: position)
         }
     }

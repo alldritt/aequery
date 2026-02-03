@@ -25,8 +25,14 @@ public indirect enum Predicate: Equatable {
     case byRange(Int, Int)
     case byName(String)
     case byID(Value)
+    case byOrdinal(Ordinal)
     case test(TestExpr)
     case compound(Predicate, BoolOp, Predicate)
+}
+
+public enum Ordinal: Equatable {
+    case middle
+    case some
 }
 
 public struct TestExpr: Equatable {

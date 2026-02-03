@@ -11,7 +11,7 @@ swift build
 ## Usage
 
 ```
-aequery [--json | --text] [--verbose] [--dry-run] [--sdef] '<expression>'
+aequery [--json | --text | --applescript | --chevron] [--flatten] [--verbose] [--dry-run] [--sdef] '<expression>'
 ```
 
 ### Flags
@@ -20,6 +20,9 @@ aequery [--json | --text] [--verbose] [--dry-run] [--sdef] '<expression>'
 |------|-------------|
 | `--json` | Output as JSON (default) |
 | `--text` | Output as plain text |
+| `--applescript` | Output as AppleScript using SDEF terminology |
+| `--chevron` | Output as AppleScript using `«class xxxx»` chevron syntax |
+| `--flatten` | Flatten nested lists into a single list |
 | `--verbose` | Show tokens, AST, and resolved steps on stderr |
 | `--dry-run` | Parse and resolve only, do not send Apple Events |
 | `--sdef` | Print the SDEF definition for the resolved element or property |
@@ -45,12 +48,29 @@ aequery --text '/Finder/desktop/name'
 aequery '/"Script Debugger"/windows'
 ```
 
+### Multi-word names
+
+SDEF class and property names with multiple words (e.g., `disk item`, `file type`) are handled automatically — the lexer greedily consumes spaces between words when followed by another letter. No quoting is needed:
+
+```bash
+aequery '/Finder/disk items/name'
+aequery '/Finder/files[file type = "txt"]/name'
+```
+
+Reserved keywords (`and`, `or`, `contains`, `begins`, `ends`, `middle`, `some`) act as word boundaries. If a keyword appears as a word within a multi-word name, the lexer splits at that point. For example, `file type contains "txt"` is parsed as the name `file type`, the keyword `contains`, and the value `"txt"`. App names that contain reserved words can be quoted to avoid ambiguity:
+
+```bash
+aequery '/"Some App"/windows'
+```
+
 ### Predicates
 
 | Syntax | Meaning | Example |
 |--------|---------|---------|
 | `[n]` | By index (1-based) | `/TextEdit/documents[1]/name` |
 | `[-1]` | Last element | `/Finder/windows[-1]/name` |
+| `[middle]` | Middle element | `/Finder/windows[middle]/name` |
+| `[some]` | Random element | `/Finder/windows[some]/name` |
 | `[n:m]` | Range | `/TextEdit/documents[1]/paragraphs[1:5]` |
 | `[@name="x"]` | By name | `/Finder/windows[@name="Desktop"]` |
 | `[#id=n]` | By unique ID | `/Finder/windows[#id=42]` |
@@ -96,6 +116,19 @@ aequery --sdef '/Finder/windows'
 
 # Show SDEF definition for the name property
 aequery --sdef '/Finder/windows/name'
+
+# Flatten nested lists (e.g. name of every window of every space)
+aequery --flatten '/Finder/windows/name'
+
+# AppleScript terminology output
+aequery --applescript '/Finder/windows'
+# tell application "Finder"
+#     every window
+# end tell
+
+# AppleScript chevron output
+aequery --chevron '/Finder/windows'
+# every «class cwin» of application "Finder"
 ```
 
 ## Architecture

@@ -5,6 +5,10 @@ public struct SDEFParser {
 
     public func parse(data: Data) throws -> ScriptingDictionary {
         let doc = try XMLDocument(data: data)
+
+        // Resolve xi:include directives before parsing
+        resolveXIncludes(in: doc)
+
         var dictionary = ScriptingDictionary()
 
         // Parse all suites
@@ -15,6 +19,44 @@ public struct SDEFParser {
         }
 
         return dictionary
+    }
+
+    /// Resolve `xi:include` elements by loading the referenced file and inlining its content.
+    private func resolveXIncludes(in doc: XMLDocument) {
+        guard let includes = try? doc.nodes(forXPath: "//*[local-name()='include']"),
+              !includes.isEmpty else { return }
+        resolveIncludeNodes(includes)
+    }
+
+    private func resolveIncludeNodes(_ includes: [XMLNode]) {
+        for include in includes {
+            guard let includeElement = include as? XMLElement,
+                  let href = includeElement.attribute(forName: "href")?.stringValue,
+                  let url = URL(string: href),
+                  let data = try? Data(contentsOf: url),
+                  let includedDoc = try? XMLDocument(data: data) else { continue }
+
+            let parent = includeElement.parent as? XMLElement
+            let index = includeElement.index
+
+            // Collect nodes to insert from the included document
+            // The xpointer typically selects suite children; just grab all suite-level nodes
+            var nodesToInsert: [XMLNode] = []
+            if let suites = try? includedDoc.nodes(forXPath: "//dictionary/suite/*") {
+                nodesToInsert = suites
+            } else if let rootChildren = includedDoc.rootElement()?.children {
+                nodesToInsert = rootChildren
+            }
+
+            // Remove the xi:include element
+            includeElement.detach()
+
+            // Insert the included nodes at the same position
+            for (offset, node) in nodesToInsert.enumerated() {
+                let copy = node.copy() as! XMLNode
+                parent?.insertChild(copy, at: index + offset)
+            }
+        }
     }
 
     public func parse(xmlString: String) throws -> ScriptingDictionary {
