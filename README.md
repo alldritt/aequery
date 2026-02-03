@@ -2,6 +2,13 @@
 
 A macOS command-line tool that queries scriptable applications using XPath-like expressions, translating them into Apple Events.
 
+## Install
+
+```
+brew tap alldritt/tools
+brew install aequery
+```
+
 ## Build
 
 ```
