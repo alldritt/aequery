@@ -7,7 +7,7 @@ struct AEQueryCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "aequery",
         abstract: "Query scriptable applications using XPath-like expressions.",
-        version: "0.1.0"
+        version: "0.2.0"
     )
 
     @Argument(help: "The XPath-like expression to evaluate, e.g. '/Finder/windows/name'")
