@@ -130,6 +130,117 @@ public struct SDEFResolver {
             availableProperties: availableProperties
         )
     }
+
+    /// Look up the SDEF definition for the final step in a query.
+    /// Returns a description of the property or class at the end of the path.
+    public func sdefInfo(for query: AEQuery) throws -> SDEFInfo {
+        guard let appClass = dictionary.findClass("application") else {
+            throw ResolverError.missingApplicationClass
+        }
+
+        // With no steps, describe the application class
+        guard !query.steps.isEmpty else {
+            return .classInfo(classDetail(appClass))
+        }
+
+        var currentClass = appClass
+
+        for (index, step) in query.steps.enumerated() {
+            let name = step.name.lowercased()
+            let isLast = (index == query.steps.count - 1)
+
+            // Check elements
+            let allElems = dictionary.allElements(for: currentClass)
+            var foundAsElement = false
+            for elem in allElems {
+                if let elemClass = dictionary.findClass(elem.type) {
+                    let match = elemClass.name.lowercased() == name
+                        || elemClass.pluralName?.lowercased() == name
+                        || elem.type.lowercased() == name
+                    if match {
+                        if isLast {
+                            return .classInfo(classDetail(elemClass))
+                        }
+                        currentClass = elemClass
+                        foundAsElement = true
+                        break
+                    }
+                }
+            }
+            if foundAsElement { continue }
+
+            // Check plural lookup
+            if let cls = dictionary.findClassByPlural(name) {
+                if isLast {
+                    return .classInfo(classDetail(cls))
+                }
+                currentClass = cls
+                continue
+            }
+
+            // Check properties
+            let allProps = dictionary.allProperties(for: currentClass)
+            for prop in allProps {
+                if prop.name.lowercased() == name {
+                    if isLast {
+                        return .propertyInfo(PropertyDetail(
+                            name: prop.name,
+                            code: prop.code,
+                            type: prop.type,
+                            access: prop.access,
+                            inClass: currentClass.name
+                        ))
+                    }
+                    if let propType = prop.type, let nextClass = dictionary.findClass(propType) {
+                        currentClass = nextClass
+                    }
+                    break
+                }
+            }
+        }
+
+        // Shouldn't reach here if resolve() succeeded, but just in case
+        return .classInfo(classDetail(currentClass))
+    }
+
+    private func classDetail(_ cls: ClassDef) -> ClassDetail {
+        let allProps = dictionary.allProperties(for: cls)
+        let allElems = dictionary.allElements(for: cls)
+        let elementNames = allElems.compactMap { elem -> (String, String)? in
+            guard let elemClass = dictionary.findClass(elem.type) else { return nil }
+            return (elemClass.pluralName ?? elemClass.name, elemClass.code)
+        }
+        return ClassDetail(
+            name: cls.name,
+            code: cls.code,
+            pluralName: cls.pluralName,
+            inherits: cls.inherits,
+            properties: allProps,
+            elements: elementNames
+        )
+    }
+}
+
+public enum SDEFInfo {
+    case classInfo(ClassDetail)
+    case propertyInfo(PropertyDetail)
+}
+
+public struct ClassDetail {
+    public let name: String
+    public let code: String
+    public let pluralName: String?
+    public let inherits: String?
+    public let properties: [PropertyDef]
+    public let elements: [(String, String)]  // (name, code)
+}
+
+public struct PropertyDetail {
+    public let name: String
+    public let code: String
+    public let type: String?
+    public let access: PropertyAccess?
+    public let inClass: String
 }
 
 public enum ResolverError: Error, LocalizedError, Equatable {

@@ -11,7 +11,7 @@ swift build
 ## Usage
 
 ```
-aequery [--json | --text] [--verbose] [--dry-run] '<expression>'
+aequery [--json | --text] [--verbose] [--dry-run] [--sdef] '<expression>'
 ```
 
 ### Flags
@@ -22,6 +22,7 @@ aequery [--json | --text] [--verbose] [--dry-run] '<expression>'
 | `--text` | Output as plain text |
 | `--verbose` | Show tokens, AST, and resolved steps on stderr |
 | `--dry-run` | Parse and resolve only, do not send Apple Events |
+| `--sdef` | Print the SDEF definition for the resolved element or property |
 
 ## Expression Syntax
 
@@ -89,6 +90,12 @@ aequery --verbose --dry-run '/TextEdit/documents[1]/paragraphs'
 
 # First window name
 aequery --text '/Finder/windows[1]/name'
+
+# Show SDEF definition for the window class
+aequery --sdef '/Finder/windows'
+
+# Show SDEF definition for the name property
+aequery --sdef '/Finder/windows/name'
 ```
 
 ## Architecture
@@ -114,7 +121,7 @@ Sources/
 swift test
 ```
 
-88 tests across 8 suites covering the lexer, parser, SDEF parsing, resolver, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
+94 tests across 8 suites covering the lexer, parser, SDEF parsing, resolver, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
 
 ## Requirements
 

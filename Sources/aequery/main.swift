@@ -25,6 +25,9 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Parse and resolve only, do not send Apple Events")
     var dryRun: Bool = false
 
+    @Flag(name: .long, help: "Print the SDEF definition for the resolved element or property")
+    var sdef: Bool = false
+
     var outputFormat: OutputFormat {
         text ? .text : .json
     }
@@ -64,6 +67,12 @@ struct AEQueryCommand: ParsableCommand {
             }
         }
 
+        if sdef {
+            let info = try resolver.sdefInfo(for: query)
+            print(formatSDEFInfo(info))
+            return
+        }
+
         if dryRun {
             FileHandle.standardError.write("Dry run: parsed and resolved successfully.\n")
             return
@@ -89,6 +98,55 @@ struct AEQueryCommand: ParsableCommand {
         let formatter = OutputFormatter(format: outputFormat)
         let output = formatter.format(value)
         print(output)
+    }
+}
+
+func formatSDEFInfo(_ info: SDEFInfo) -> String {
+    switch info {
+    case .classInfo(let cls):
+        var lines: [String] = []
+        var header = "class \(cls.name) '\(cls.code)'"
+        if let plural = cls.pluralName { header += " (\(plural))" }
+        if let inherits = cls.inherits { header += " : \(inherits)" }
+        lines.append(header)
+
+        if !cls.properties.isEmpty {
+            lines.append("  properties:")
+            for prop in cls.properties {
+                var line = "    \(prop.name) '\(prop.code)'"
+                if let type = prop.type { line += " : \(type)" }
+                if let access = prop.access {
+                    switch access {
+                    case .readOnly: line += " [r]"
+                    case .readWrite: line += " [rw]"
+                    case .writeOnly: line += " [w]"
+                    }
+                }
+                lines.append(line)
+            }
+        }
+
+        if !cls.elements.isEmpty {
+            lines.append("  elements:")
+            for (name, code) in cls.elements {
+                lines.append("    \(name) '\(code)'")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+
+    case .propertyInfo(let prop):
+        var line = "property \(prop.name) '\(prop.code)'"
+        if let type = prop.type { line += " : \(type)" }
+        if let access = prop.access {
+            switch access {
+            case .readOnly: line += " [r]"
+            case .readWrite: line += " [rw]"
+            case .writeOnly: line += " [w]"
+            }
+        }
+        line += "  (in class \(prop.inClass))"
+        return line
     }
 }
 
