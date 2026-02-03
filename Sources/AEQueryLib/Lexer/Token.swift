@@ -22,6 +22,7 @@ public enum TokenKind: Equatable {
     // Keywords
     case and
     case or
+    case contains
 
     // Values
     case name(String)

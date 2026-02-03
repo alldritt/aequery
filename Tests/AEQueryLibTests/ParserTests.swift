@@ -119,6 +119,17 @@ struct ParserTests {
         }
     }
 
+    @Test func testContains() throws {
+        let q = try parse("/Finder/files[name contains \"test\"]")
+        if case .test(let expr) = q.steps[0].predicates[0] {
+            #expect(expr.path == ["name"])
+            #expect(expr.op == .contains)
+            #expect(expr.value == .string("test"))
+        } else {
+            Issue.record("Expected .test predicate")
+        }
+    }
+
     @Test func testMultiplePredicates() throws {
         let q = try parse("/Finder/windows[1][@name=\"Desktop\"]")
         #expect(q.steps[0].predicates.count == 2)

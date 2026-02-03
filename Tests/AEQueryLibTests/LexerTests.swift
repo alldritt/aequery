@@ -81,6 +81,13 @@ struct LexerTests {
         #expect(k == [.eof])
     }
 
+    @Test func testContainsKeyword() throws {
+        let k = try kinds("[name contains \"test\"]")
+        #expect(k == [
+            .leftBracket, .name("name"), .contains, .quotedString("test"), .rightBracket, .eof
+        ])
+    }
+
     @Test func testInvalidCharacter() throws {
         #expect(throws: LexerError.self) {
             try kinds("/Finder/windows!")

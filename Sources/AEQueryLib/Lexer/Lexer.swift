@@ -119,7 +119,7 @@ public struct Lexer {
         return Token(kind: .integer(Int(numStr)!), position: start)
     }
 
-    private static let keywords: Set<String> = ["and", "or"]
+    private static let keywords: Set<String> = ["and", "or", "contains"]
 
     private mutating func scanName() -> Token {
         let start = position
@@ -155,15 +155,23 @@ public struct Lexer {
             return keywordToken(name.lowercased(), position: start)
         }
 
-        // Check if the name starts with a keyword followed by a space
-        // e.g., "or name" should be split into keyword "or" and leave "name" for next scan
-        for kw in Self.keywords {
-            if name.lowercased().hasPrefix(kw),
-               name.count > kw.count,
-               name[name.index(name.startIndex, offsetBy: kw.count)] == " " {
-                // Reset position to just after the keyword
-                position = start + kw.count
-                return keywordToken(kw, position: start)
+        // Check if any word in the name is a keyword; if so, split at that boundary.
+        // e.g., "or name" → keyword "or"; "name contains" → name "name"
+        let words = name.split(separator: " ", omittingEmptySubsequences: true)
+        if words.count > 1 {
+            for (i, word) in words.enumerated() {
+                if Self.keywords.contains(String(word).lowercased()) {
+                    if i == 0 {
+                        // Keyword is the first word — emit keyword, rewind past it
+                        position = start + word.count
+                        return keywordToken(String(word).lowercased(), position: start)
+                    } else {
+                        // Keyword found mid-name — emit everything before it as a name
+                        let prefix = words[0..<i].joined(separator: " ")
+                        position = start + prefix.count
+                        return Token(kind: .name(prefix), position: start)
+                    }
+                }
             }
         }
 
@@ -174,6 +182,7 @@ public struct Lexer {
         switch keyword {
         case "and": return Token(kind: .and, position: position)
         case "or": return Token(kind: .or, position: position)
+        case "contains": return Token(kind: .contains, position: position)
         default: return Token(kind: .name(keyword), position: position)
         }
     }

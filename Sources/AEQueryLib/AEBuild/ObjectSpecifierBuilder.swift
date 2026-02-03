@@ -301,6 +301,7 @@ public struct ObjectSpecifierBuilder {
         case .greaterThan: return AEConstants.kAEGreaterThan
         case .lessOrEqual: return AEConstants.kAELessThanEquals
         case .greaterOrEqual: return AEConstants.kAEGreaterThanEquals
+        case .contains: return AEConstants.kAEContains
         }
     }
 

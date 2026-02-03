@@ -48,6 +48,7 @@ public enum ComparisonOp: Equatable {
     case greaterThan
     case lessOrEqual
     case greaterOrEqual
+    case contains
 }
 
 public enum BoolOp: Equatable {

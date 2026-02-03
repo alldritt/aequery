@@ -57,12 +57,12 @@ aequery '/"Script Debugger"/windows'
 
 ### Whose clauses
 
-Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`
+Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`, `contains`
 
 Compound expressions with `and` / `or`:
 
 ```bash
-aequery '/Finder/files[size > 1000 and name = "test"]'
+aequery '/Finder/files[size > 1000 and name contains "test"]'
 ```
 
 ### Multiple predicates
