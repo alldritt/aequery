@@ -111,7 +111,7 @@ aequery '/Mail/account/mailboxes/message[sender ends "apple.com"]' --flatten
 # ["address1@domain.com", "address2@domain.com", ...]
 
 # JSON list of subjects of all emails from a sender, flattened to a list
-aequery '/Mail/account/mailboxes/message[sender = "sender@comain.com"]/subject' --flatten
+aequery '/Mail/account/mailboxes/message[sender = "sender@domain.com"]/subject' --flatten
 # ["subject string", ...]
 
 # Plain text output
