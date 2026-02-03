@@ -88,6 +88,20 @@ struct LexerTests {
         ])
     }
 
+    @Test func testBeginsKeyword() throws {
+        let k = try kinds("[name begins \"test\"]")
+        #expect(k == [
+            .leftBracket, .name("name"), .begins, .quotedString("test"), .rightBracket, .eof
+        ])
+    }
+
+    @Test func testEndsKeyword() throws {
+        let k = try kinds("[name ends \"test\"]")
+        #expect(k == [
+            .leftBracket, .name("name"), .ends, .quotedString("test"), .rightBracket, .eof
+        ])
+    }
+
     @Test func testInvalidCharacter() throws {
         #expect(throws: LexerError.self) {
             try kinds("/Finder/windows!")

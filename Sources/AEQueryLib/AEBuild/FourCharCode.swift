@@ -66,6 +66,8 @@ public enum AEConstants {
     public static let kAELessThanEquals = FourCharCode("<=  ")
     public static let kAENotEquals = FourCharCode("!=  ")
     public static let kAEContains = FourCharCode("cont")
+    public static let kAEBeginsWith = FourCharCode("bgwt")
+    public static let kAEEndsWith = FourCharCode("ends")
 
     // Logical operators
     public static let kAEAND = FourCharCode("AND ")

@@ -130,6 +130,28 @@ struct ParserTests {
         }
     }
 
+    @Test func testBeginsWith() throws {
+        let q = try parse("/Finder/files[name begins \"Read\"]")
+        if case .test(let expr) = q.steps[0].predicates[0] {
+            #expect(expr.path == ["name"])
+            #expect(expr.op == .beginsWith)
+            #expect(expr.value == .string("Read"))
+        } else {
+            Issue.record("Expected .test predicate")
+        }
+    }
+
+    @Test func testEndsWith() throws {
+        let q = try parse("/Finder/files[name ends \".txt\"]")
+        if case .test(let expr) = q.steps[0].predicates[0] {
+            #expect(expr.path == ["name"])
+            #expect(expr.op == .endsWith)
+            #expect(expr.value == .string(".txt"))
+        } else {
+            Issue.record("Expected .test predicate")
+        }
+    }
+
     @Test func testMultiplePredicates() throws {
         let q = try parse("/Finder/windows[1][@name=\"Desktop\"]")
         #expect(q.steps[0].predicates.count == 2)

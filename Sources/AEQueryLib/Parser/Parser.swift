@@ -223,6 +223,8 @@ public struct Parser {
         case .lessOrEqual: op = .lessOrEqual
         case .greaterOrEqual: op = .greaterOrEqual
         case .contains: op = .contains
+        case .begins: op = .beginsWith
+        case .ends: op = .endsWith
         default:
             throw ParserError.unexpectedToken(expected: .equals, got: current)
         }

@@ -23,6 +23,8 @@ public enum TokenKind: Equatable {
     case and
     case or
     case contains
+    case begins
+    case ends
 
     // Values
     case name(String)

@@ -57,7 +57,7 @@ aequery '/"Script Debugger"/windows'
 
 ### Whose clauses
 
-Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`, `contains`
+Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`, `contains`, `begins`, `ends`
 
 Compound expressions with `and` / `or`:
 
