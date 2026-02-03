@@ -37,6 +37,9 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Print the SDEF definition for the resolved element or property")
     var sdef: Bool = false
 
+    @Flag(name: .long, help: "Find all valid paths from the application root to the target")
+    var findPaths: Bool = false
+
     var outputFormat: OutputFormat {
         text ? .text : .json
     }
@@ -64,6 +67,25 @@ struct AEQueryCommand: ParsableCommand {
 
         if verbose {
             FileHandle.standardError.write("SDEF: \(dictionary.classes.count) classes loaded\n")
+        }
+
+        // 3a. Find paths (early exit)
+        if findPaths {
+            let pathFinder = SDEFPathFinder(dictionary: dictionary)
+            let target = query.steps.last?.name ?? "application"
+            let paths = pathFinder.findPaths(to: target)
+            if paths.isEmpty {
+                FileHandle.standardError.write("No paths found to '\(target)'\n")
+                throw ExitCode.failure
+            }
+            for path in paths {
+                if path.expression.isEmpty {
+                    print("/\(query.appName)")
+                } else {
+                    print("/\(query.appName)/\(path.expression)")
+                }
+            }
+            return
         }
 
         // 4. Resolve

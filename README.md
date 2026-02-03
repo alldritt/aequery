@@ -11,7 +11,7 @@ swift build
 ## Usage
 
 ```
-aequery [--json | --text | --applescript | --chevron] [--flatten] [--verbose] [--dry-run] [--sdef] '<expression>'
+aequery [--json | --text | --applescript | --chevron] [--flatten] [--verbose] [--dry-run] [--sdef] [--find-paths] '<expression>'
 ```
 
 ### Flags
@@ -26,6 +26,7 @@ aequery [--json | --text | --applescript | --chevron] [--flatten] [--verbose] [-
 | `--verbose` | Show tokens, AST, and resolved steps on stderr |
 | `--dry-run` | Parse and resolve only, do not send Apple Events |
 | `--sdef` | Print the SDEF definition for the resolved element or property |
+| `--find-paths` | Find all valid paths from the application root to the target |
 
 ## Expression Syntax
 
@@ -129,6 +130,19 @@ aequery --applescript '/Finder/windows'
 # AppleScript chevron output
 aequery --chevron '/Finder/windows'
 # every «class cwin» of application "Finder"
+
+# Find all paths to a class
+aequery --find-paths '/Finder/file'
+# /Finder/files
+# /Finder/Finder windows/files
+# /Finder/folders/files
+
+# Find all paths to a property
+aequery --find-paths '/Finder/name'
+# /Finder/name
+# /Finder/files/name
+# /Finder/windows/name
+# ...
 ```
 
 ## Architecture
