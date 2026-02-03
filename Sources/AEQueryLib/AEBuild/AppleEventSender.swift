@@ -29,7 +29,7 @@ public struct AppleEventSender {
         let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
         let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
         guard err == noErr else {
-            throw AEQueryError.appleEventFailed(Int(err), "AESendMessage failed with OSStatus \(err)")
+            throw AEQueryError.appleEventFailed(Int(err), "AESendMessage failed with OSStatus \(err)", nil)
         }
         reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
 
@@ -39,33 +39,24 @@ public struct AppleEventSender {
             return result
         }
 
-        // Try extracting using the raw keyword value for '----'
-        let keyDirect: AEKeyword = 0x2D2D2D2D  // '----'
-        if let result = reply.paramDescriptor(forKeyword: keyDirect) {
-            return result
-        }
-
-        // Check if reply has numbered descriptors (list-like)
-        if reply.numberOfItems > 0 {
-            if let first = reply.atIndex(1) {
-                // If there's only one item and it looks like a result, return it
-                if reply.numberOfItems == 1 {
-                    return first
-                }
-            }
-            return reply
-        }
-
-        // Check for error in reply
-        let errKeyword: AEKeyword = 0x65727270  // 'errn'
+        // Check for error in reply before any fallbacks
+        let errKeyword: AEKeyword = 0x6572726E  // 'errn'
         if let errDesc = reply.paramDescriptor(forKeyword: errKeyword) {
             let errNum = Int(errDesc.int32Value)
-            let errMsg = reply.paramDescriptor(forKeyword: 0x65727273)?.stringValue ?? "Unknown error"  // 'errs'
-            throw AEQueryError.appleEventFailed(errNum, errMsg)
+            let errMsg = reply.paramDescriptor(forKeyword: 0x65727273)?.stringValue  // 'errs'
+
+            // Extract offending object ('erob') if present
+            let erobKeyword: AEKeyword = 0x65726F62  // 'erob'
+            var offendingObject: AEValue? = nil
+            if let erobDesc = reply.paramDescriptor(forKeyword: erobKeyword) {
+                offendingObject = DescriptorDecoder().decode(erobDesc)
+            }
+
+            throw AEQueryError.appleEventFailed(errNum, errMsg ?? "", offendingObject)
         }
 
-        // If no direct object, the reply itself might be the result
-        return reply
+        // No direct object and no error — return null
+        return NSAppleEventDescriptor.null()
     }
 
     private func resolveBundleIdentifier(_ appName: String) throws -> String {

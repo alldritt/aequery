@@ -32,7 +32,7 @@ public struct AppleScriptFormatter {
 
     // MARK: - Scalar formatting
 
-    func formatValue(_ value: AEValue) -> String {
+    public func formatValue(_ value: AEValue) -> String {
         switch value {
         case .string(let s):
             let escaped = s.replacingOccurrences(of: "\\", with: "\\\\")
@@ -64,7 +64,7 @@ public struct AppleScriptFormatter {
 
     // MARK: - Object specifier formatting
 
-    func formatSpecifier(_ value: AEValue) -> String {
+    public func formatSpecifier(_ value: AEValue) -> String {
         guard case .objectSpecifier(let want, let form, let seld, let from) = value else {
             return formatValue(value)
         }

@@ -131,7 +131,19 @@ struct AEQueryCommand: ParsableCommand {
 
         // 6. Send
         let sender = AppleEventSender()
-        let reply = try sender.sendGetEvent(to: query.appName, specifier: specifier, timeoutSeconds: timeout)
+        let reply: NSAppleEventDescriptor
+        do {
+            reply = try sender.sendGetEvent(to: query.appName, specifier: specifier, timeoutSeconds: timeout)
+        } catch let error as AEQueryError {
+            if case .appleEventFailed(let code, _, let obj) = error {
+                let asFormatter = AppleScriptFormatter(style: .terminology, dictionary: dictionary, appName: query.appName)
+                if let obj = obj {
+                    let objStr = asFormatter.formatSpecifier(obj)
+                    throw AEQueryError.appleEventFailed(code, "Can't get \(objStr).", nil)
+                }
+            }
+            throw error
+        }
 
         // 7. Decode
         let decoder = DescriptorDecoder()
