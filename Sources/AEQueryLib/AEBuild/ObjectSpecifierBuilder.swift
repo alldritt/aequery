@@ -28,7 +28,6 @@ public struct ObjectSpecifierBuilder {
             if step.predicates.isEmpty {
                 return buildEveryElement(code: step.code, container: container)
             }
-            // Apply the first predicate (most common case)
             let predicate = step.predicates[0]
             return buildElementWithPredicate(code: step.code, predicate: predicate, container: container)
         }

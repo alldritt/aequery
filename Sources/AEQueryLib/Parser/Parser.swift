@@ -83,6 +83,9 @@ public struct Parser {
 
         var predicates: [Predicate] = []
         while currentKind == .leftBracket {
+            if !predicates.isEmpty {
+                throw ParserError.multiplePredicates(position: current.position)
+            }
             predicates.append(try parsePredicate())
         }
 
@@ -261,6 +264,7 @@ public enum ParserError: Error, LocalizedError {
     case unexpectedToken(expected: TokenKind, got: Token)
     case unexpectedEnd
     case invalidPredicate(position: Int)
+    case multiplePredicates(position: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -270,6 +274,8 @@ public enum ParserError: Error, LocalizedError {
             return "Unexpected end of input"
         case .invalidPredicate(let pos):
             return "Invalid predicate at position \(pos)"
+        case .multiplePredicates(let pos):
+            return "Multiple predicates are not supported at position \(pos). Use 'and'/'or' to combine conditions in a single predicate."
         }
     }
 }

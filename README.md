@@ -88,14 +88,6 @@ Compound expressions with `and` / `or`:
 aequery '/Finder/files[size > 1000 and name contains "test"]'
 ```
 
-### Multiple predicates
-
-Predicates can be chained:
-
-```bash
-aequery '/Finder/windows[1][@name="Desktop"]'
-```
-
 ## Examples
 
 ```bash

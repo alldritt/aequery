@@ -152,11 +152,10 @@ struct ParserTests {
         }
     }
 
-    @Test func testMultiplePredicates() throws {
-        let q = try parse("/Finder/windows[1][@name=\"Desktop\"]")
-        #expect(q.steps[0].predicates.count == 2)
-        #expect(q.steps[0].predicates[0] == .byIndex(1))
-        #expect(q.steps[0].predicates[1] == .byName("Desktop"))
+    @Test func testMultiplePredicatesError() throws {
+        #expect(throws: ParserError.self) {
+            try parse("/Finder/windows[1][@name=\"Desktop\"]")
+        }
     }
 
     @Test func testMissingLeadingSlash() throws {
