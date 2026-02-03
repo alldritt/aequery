@@ -91,15 +91,17 @@ public struct ClassDef: Equatable {
     public let code: String
     public let pluralName: String?
     public let inherits: String?
+    public let hidden: Bool
     public var properties: [PropertyDef]
     public var elements: [ElementDef]
 
     public init(name: String, code: String, pluralName: String? = nil, inherits: String? = nil,
-                properties: [PropertyDef] = [], elements: [ElementDef] = []) {
+                hidden: Bool = false, properties: [PropertyDef] = [], elements: [ElementDef] = []) {
         self.name = name
         self.code = code
         self.pluralName = pluralName
         self.inherits = inherits
+        self.hidden = hidden
         self.properties = properties
         self.elements = elements
     }
@@ -110,12 +112,14 @@ public struct PropertyDef: Equatable {
     public let code: String
     public let type: String?
     public let access: PropertyAccess?
+    public let hidden: Bool
 
-    public init(name: String, code: String, type: String? = nil, access: PropertyAccess? = nil) {
+    public init(name: String, code: String, type: String? = nil, access: PropertyAccess? = nil, hidden: Bool = false) {
         self.name = name
         self.code = code
         self.type = type
         self.access = access
+        self.hidden = hidden
     }
 }
 
@@ -128,10 +132,12 @@ public enum PropertyAccess: String, Equatable {
 public struct ElementDef: Equatable {
     public let type: String   // singular class name
     public let access: String?
+    public let hidden: Bool
 
-    public init(type: String, access: String? = nil) {
+    public init(type: String, access: String? = nil, hidden: Bool = false) {
         self.type = type
         self.access = access
+        self.hidden = hidden
     }
 }
 

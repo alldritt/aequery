@@ -98,6 +98,7 @@ public struct SDEFParser {
         }
         let plural = element.attribute(forName: "plural")?.stringValue
         let inherits = element.attribute(forName: "inherits")?.stringValue
+        let hidden = element.attribute(forName: "hidden")?.stringValue == "yes"
         let properties = parseProperties(element)
         let elements = parseElements(element)
 
@@ -106,6 +107,7 @@ public struct SDEFParser {
             code: code,
             pluralName: plural,
             inherits: inherits,
+            hidden: hidden,
             properties: properties,
             elements: elements
         )
@@ -120,7 +122,8 @@ public struct SDEFParser {
             let type = propElement.attribute(forName: "type")?.stringValue
             let accessStr = propElement.attribute(forName: "access")?.stringValue
             let access = accessStr.flatMap { PropertyAccess(rawValue: $0) }
-            props.append(PropertyDef(name: name, code: code, type: type, access: access))
+            let hidden = propElement.attribute(forName: "hidden")?.stringValue == "yes"
+            props.append(PropertyDef(name: name, code: code, type: type, access: access, hidden: hidden))
         }
         return props
     }
@@ -131,7 +134,8 @@ public struct SDEFParser {
             guard let elemElement = node as? XMLElement,
                   let type = elemElement.attribute(forName: "type")?.stringValue else { continue }
             let access = elemElement.attribute(forName: "access")?.stringValue
-            elems.append(ElementDef(type: type, access: access))
+            let hidden = elemElement.attribute(forName: "hidden")?.stringValue == "yes"
+            elems.append(ElementDef(type: type, access: access, hidden: hidden))
         }
         return elems
     }

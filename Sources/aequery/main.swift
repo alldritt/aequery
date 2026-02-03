@@ -78,7 +78,13 @@ struct AEQueryCommand: ParsableCommand {
                 FileHandle.standardError.write("No paths found to '\(target)'\n")
                 throw ExitCode.failure
             }
+            var prevWasElementOnly = true
             for path in paths {
+                let isElementOnly = path.propertyIntermediateCount == 0
+                if !isElementOnly && prevWasElementOnly && paths.count > 1 {
+                    print("---")
+                }
+                prevWasElementOnly = isElementOnly
                 if path.expression.isEmpty {
                     print("/\(query.appName)")
                 } else {

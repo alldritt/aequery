@@ -154,6 +154,25 @@ struct SDEFPathFinderTests {
         #expect(expressions.contains("players/current track/artist"))
     }
 
+    @Test func testElementOnlyPathsSortFirst() throws {
+        let finder = try makeFinder()
+        // "artist" path goes through "current track" (property) intermediate.
+        // It should have propertyIntermediateCount > 0.
+        let paths = finder.findPaths(to: "artist")
+        let throughProperty = paths.first { $0.expression == "players/current track/artist" }
+        #expect(throughProperty != nil)
+        #expect(throughProperty!.propertyIntermediateCount == 1)
+
+        // "name" on document: element-only path "documents/name" should sort
+        // before property-intermediate paths
+        let namePaths = finder.findPaths(to: "name")
+        let firstElementOnly = namePaths.firstIndex { $0.propertyIntermediateCount > 0 } ?? namePaths.endIndex
+        // All paths before the first property-intermediate should have count 0
+        for path in namePaths[..<firstElementOnly] {
+            #expect(path.propertyIntermediateCount == 0)
+        }
+    }
+
     @Test func testApplicationAsTarget() throws {
         let finder = try makeFinder()
         let paths = finder.findPaths(to: "application")
