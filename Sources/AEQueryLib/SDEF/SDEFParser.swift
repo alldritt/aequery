@@ -39,13 +39,26 @@ public struct SDEFParser {
             let parent = includeElement.parent as? XMLElement
             let index = includeElement.index
 
-            // Collect nodes to insert from the included document
-            // The xpointer typically selects suite children; just grab all suite-level nodes
+            // Evaluate the xpointer attribute to select the right nodes from the
+            // included document. The xpointer contains an XPath expression, e.g.:
+            //   Bike:     xpointer(/dictionary/suite)         → import whole suites
+            //   Contacts: xpointer(/dictionary/suite/node()…) → import suite children
             var nodesToInsert: [XMLNode] = []
-            if let suites = try? includedDoc.nodes(forXPath: "//dictionary/suite") {
-                nodesToInsert = suites
-            } else if let rootChildren = includedDoc.rootElement()?.children {
-                nodesToInsert = rootChildren
+            if let xpointer = includeElement.attribute(forName: "xpointer")?.stringValue,
+               let xpath = extractXPath(from: xpointer),
+               let nodes = try? includedDoc.nodes(forXPath: xpath),
+               !nodes.isEmpty {
+                nodesToInsert = nodes
+            } else if parent?.name == "dictionary" {
+                // Fallback: include at dictionary level → import whole suites
+                if let suites = try? includedDoc.nodes(forXPath: "/dictionary/suite") {
+                    nodesToInsert = suites
+                }
+            } else {
+                // Fallback: include inside a suite → import suite children
+                if let children = try? includedDoc.nodes(forXPath: "/dictionary/suite/*") {
+                    nodesToInsert = children
+                }
             }
 
             // Remove the xi:include element
@@ -57,6 +70,17 @@ public struct SDEFParser {
                 parent?.insertChild(copy, at: index + offset)
             }
         }
+    }
+
+    /// Extract the XPath expression from an xpointer value like "xpointer(/dictionary/suite)".
+    private func extractXPath(from xpointer: String) -> String? {
+        let prefix = "xpointer("
+        let suffix = ")"
+        guard xpointer.hasPrefix(prefix), xpointer.hasSuffix(suffix) else { return nil }
+        let start = xpointer.index(xpointer.startIndex, offsetBy: prefix.count)
+        let end = xpointer.index(xpointer.endIndex, offsetBy: -suffix.count)
+        guard start < end else { return nil }
+        return String(xpointer[start..<end])
     }
 
     public func parse(xmlString: String) throws -> ScriptingDictionary {
