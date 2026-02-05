@@ -43,6 +43,9 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Find all valid paths from the application root to the target")
     var findPaths: Bool = false
 
+    @Option(name: .long, help: "Load SDEF from a file path instead of from the application bundle")
+    var sdefFile: String? = nil
+
     @Option(name: .long, help: "Apple Event timeout in seconds (default 120, -1 for no timeout)")
     var timeout: Int = 120
 
@@ -68,8 +71,14 @@ struct AEQueryCommand: ParsableCommand {
         }
 
         // 3. Load SDEF
-        let loader = SDEFLoader()
-        let dictionary = try loader.loadSDEF(forApp: query.appName)
+        let dictionary: ScriptingDictionary
+        if let sdefFile {
+            let data = try Data(contentsOf: URL(fileURLWithPath: sdefFile))
+            dictionary = try SDEFParser().parse(data: data)
+        } else {
+            let loader = SDEFLoader()
+            dictionary = try loader.loadSDEF(forApp: query.appName)
+        }
 
         if verbose {
             FileHandle.standardError.write("SDEF: \(dictionary.classes.count) classes loaded\n")
