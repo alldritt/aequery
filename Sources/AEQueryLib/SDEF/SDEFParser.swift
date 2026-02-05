@@ -42,7 +42,7 @@ public struct SDEFParser {
             // Collect nodes to insert from the included document
             // The xpointer typically selects suite children; just grab all suite-level nodes
             var nodesToInsert: [XMLNode] = []
-            if let suites = try? includedDoc.nodes(forXPath: "//dictionary/suite/*") {
+            if let suites = try? includedDoc.nodes(forXPath: "//dictionary/suite") {
                 nodesToInsert = suites
             } else if let rootChildren = includedDoc.rootElement()?.children {
                 nodesToInsert = rootChildren
