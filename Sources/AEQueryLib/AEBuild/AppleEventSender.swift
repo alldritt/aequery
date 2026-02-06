@@ -1,7 +1,13 @@
+import AppKit
 import Foundation
 
 public struct AppleEventSender {
     public init() {}
+
+    /// Resolve the bundle identifier for an app name.
+    public func bundleIdentifier(for appName: String) throws -> String {
+        try resolveBundleIdentifier(appName)
+    }
 
     /// Send a 'get' Apple Event for the given object specifier to the target app.
     /// - Parameter timeoutSeconds: Timeout in seconds (default 120). Use -1 for no timeout, -2 for system default.
@@ -60,29 +66,9 @@ public struct AppleEventSender {
     }
 
     private func resolveBundleIdentifier(_ appName: String) throws -> String {
-        // Common well-known bundle IDs
-        let wellKnown: [String: String] = [
-            "finder": "com.apple.finder",
-            "safari": "com.apple.Safari",
-            "textedit": "com.apple.TextEdit",
-            "mail": "com.apple.mail",
-            "music": "com.apple.Music",
-            "system events": "com.apple.systemevents",
-            "system preferences": "com.apple.systempreferences",
-            "system settings": "com.apple.systempreferences",
-            "terminal": "com.apple.Terminal",
-            "notes": "com.apple.Notes",
-            "calendar": "com.apple.iCal",
-            "reminders": "com.apple.reminders",
-            "preview": "com.apple.Preview",
-            "pages": "com.apple.iWork.Pages",
-            "numbers": "com.apple.iWork.Numbers",
-            "keynote": "com.apple.iWork.Keynote",
-            "xcode": "com.apple.dt.Xcode",
-        ]
-
-        let lower = appName.lowercased()
-        if let bundleID = wellKnown[lower] {
+        // Check running applications first
+        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }),
+           let bundleID = running.bundleIdentifier {
             return bundleID
         }
 
@@ -92,6 +78,7 @@ public struct AppleEventSender {
             "/System/Applications/\(appName).app",
             "/System/Applications/Utilities/\(appName).app",
             "/Applications/Utilities/\(appName).app",
+            "/System/Library/CoreServices/\(appName).app",
         ]
         for path in candidates {
             if let bundle = Bundle(path: path),

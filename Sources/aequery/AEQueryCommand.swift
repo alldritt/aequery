@@ -148,6 +148,10 @@ struct AEQueryCommand: ParsableCommand {
         // 6. Send
         let sender = AppleEventSender()
         let reply: NSAppleEventDescriptor
+        if verbose {
+            let bundleID = try sender.bundleIdentifier(for: query.appName)
+            FileHandle.standardError.write("Sending Apple Event to '\(query.appName)' (\(bundleID), timeout: \(timeout)s)...\n")
+        }
         do {
             reply = try sender.sendGetEvent(to: query.appName, specifier: specifier, timeoutSeconds: timeout)
         } catch let error as AEQueryError {
@@ -159,6 +163,10 @@ struct AEQueryCommand: ParsableCommand {
                 }
             }
             throw error
+        }
+
+        if verbose {
+            FileHandle.standardError.write("Reply received.\n")
         }
 
         // 7. Decode
