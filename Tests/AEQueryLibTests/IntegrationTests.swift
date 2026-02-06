@@ -14,7 +14,7 @@ struct IntegrationTests {
         let aeQuery = try parser.parse()
 
         let loader = SDEFLoader()
-        let dictionary = try loader.loadSDEF(forApp: aeQuery.appName)
+        let (dictionary, _) = try loader.loadSDEF(forApp: aeQuery.appName)
         let resolver = SDEFResolver(dictionary: dictionary)
         let resolved = try resolver.resolve(aeQuery)
 
@@ -53,7 +53,7 @@ struct IntegrationTests {
 
     @Test func testFinderSDEFLoads() throws {
         let loader = SDEFLoader()
-        let dict = try loader.loadSDEF(forApp: "Finder")
+        let (dict, _) = try loader.loadSDEF(forApp: "Finder")
         #expect(dict.findClass("application") != nil)
         #expect(dict.findClass("window") != nil)
     }
@@ -64,7 +64,7 @@ struct IntegrationTests {
         var parser = Parser(tokens: tokens)
         let aeQuery = try parser.parse()
         let loader = SDEFLoader()
-        let dict = try loader.loadSDEF(forApp: "Finder")
+        let (dict, _) = try loader.loadSDEF(forApp: "Finder")
         let resolved = try SDEFResolver(dictionary: dict).resolve(aeQuery)
         #expect(resolved.steps.count == 2)
         #expect(resolved.steps[0].kind == .element)

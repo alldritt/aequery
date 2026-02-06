@@ -73,11 +73,18 @@ struct AEQueryCommand: ParsableCommand {
         // 3. Load SDEF
         let dictionary: ScriptingDictionary
         if let sdefFile {
+            if verbose {
+                FileHandle.standardError.write("SDEF source: \(sdefFile)\n")
+            }
             let data = try Data(contentsOf: URL(fileURLWithPath: sdefFile))
             dictionary = try SDEFParser().parse(data: data)
         } else {
             let loader = SDEFLoader()
-            dictionary = try loader.loadSDEF(forApp: query.appName)
+            let (dict, appPath) = try loader.loadSDEF(forApp: query.appName)
+            dictionary = dict
+            if verbose {
+                FileHandle.standardError.write("App path: \(appPath)\n")
+            }
         }
 
         if verbose {

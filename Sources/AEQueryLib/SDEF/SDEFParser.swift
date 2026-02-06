@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 public struct SDEFParser {
@@ -182,20 +183,27 @@ public struct SDEFParser {
 public struct SDEFLoader {
     public init() {}
 
-    public func loadSDEF(forApp appName: String) throws -> ScriptingDictionary {
+    public func loadSDEF(forApp appName: String) throws -> (ScriptingDictionary, String) {
         let appPath = try resolveAppPath(appName)
 
         // Try reading .sdef from bundle directly
         if let sdefData = try? loadSDEFFromBundle(appPath) {
-            return try SDEFParser().parse(data: sdefData)
+            return (try SDEFParser().parse(data: sdefData), appPath)
         }
 
         // Fall back to /usr/bin/sdef command
         let sdefData = try loadSDEFViaCommand(appPath)
-        return try SDEFParser().parse(data: sdefData)
+        return (try SDEFParser().parse(data: sdefData), appPath)
     }
 
     private func resolveAppPath(_ appName: String) throws -> String {
+        // Check if the app is currently running and use that bundle path
+        let runningApps = NSWorkspace.shared.runningApplications
+        if let running = runningApps.first(where: { $0.localizedName == appName }),
+           let bundleURL = running.bundleURL {
+            return bundleURL.path
+        }
+
         // Try common locations
         let candidates = [
             "/Applications/\(appName).app",
