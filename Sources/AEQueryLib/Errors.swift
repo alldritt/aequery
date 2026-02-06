@@ -40,6 +40,7 @@ public enum AEQueryError: Error, LocalizedError {
         case -1731: return "User canceled"
         case -1750: return "Object is not the right type"
         case -1751: return "Can't handle the Apple Event"
+        case -600: return "Application is not running"
         case -10004: return "A privilege violation occurred"
         default: return "Error \(code)"
         }

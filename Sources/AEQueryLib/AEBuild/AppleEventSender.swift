@@ -29,7 +29,7 @@ public struct AppleEventSender {
         let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
         let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
         guard err == noErr else {
-            throw AEQueryError.appleEventFailed(Int(err), "AESendMessage failed with OSStatus \(err)", nil)
+            throw AEQueryError.appleEventFailed(Int(err), "", nil)
         }
         reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
 
