@@ -170,6 +170,21 @@ aequery --sdef-file /tmp/contacts.sdef --sdef '/Contacts/people'
 aequery --sdef-file /tmp/contacts.sdef --find-paths '/Contacts/people'
 ```
 
+## Application Resolution
+
+When you use an expression like `/Finder/...`, aequery locates the application in the following order:
+
+1. **Running applications** — checks `NSWorkspace.shared.runningApplications` for a matching name, so the SDEF is loaded from the same bundle that is actually running.
+2. **Common locations** — searches these directories in order:
+   - `/Applications/`
+   - `/System/Applications/`
+   - `/System/Applications/Utilities/`
+   - `/Applications/Utilities/`
+   - `/System/Library/CoreServices/`
+3. **Spotlight (`mdfind`)** — queries Spotlight for apps matching the display name, which finds apps installed in non-standard locations (e.g., `~/Applications`).
+
+If none of these find the app, an error is returned. You can bypass resolution entirely with `--sdef-file` to load a scripting dictionary from a file. Use `--verbose` to see which app path was resolved.
+
 ## Architecture
 
 The tool is split into a library (`AEQueryLib`) and a CLI (`aequery`):
