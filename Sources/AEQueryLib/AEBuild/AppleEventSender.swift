@@ -12,8 +12,7 @@ public struct AppleEventSender {
     /// Send a 'get' Apple Event for the given object specifier to the target app.
     /// - Parameter timeoutSeconds: Timeout in seconds (default 120). Use -1 for no timeout, -2 for system default.
     public func sendGetEvent(to appName: String, specifier: NSAppleEventDescriptor, timeoutSeconds: Int = 120, verbose: Bool = false) throws -> NSAppleEventDescriptor {
-        let bundleID = try resolveBundleIdentifier(appName)
-        let targetApp = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        let targetApp = try resolveTargetDescriptor(appName)
 
         // Build core/getd event
         let event = NSAppleEventDescriptor.appleEvent(
@@ -70,6 +69,25 @@ public struct AppleEventSender {
 
         // No direct object and no error — return null
         return NSAppleEventDescriptor.null()
+    }
+
+    /// Resolve app name to a target descriptor, preferring process ID for running apps.
+    private func resolveTargetDescriptor(_ appName: String) throws -> NSAppleEventDescriptor {
+        // First check running applications by localized name
+        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) {
+            return NSAppleEventDescriptor(processIdentifier: running.processIdentifier)
+        }
+
+        // Fall back to bundle ID resolution
+        let bundleID = try resolveBundleIdentifier(appName)
+
+        // Check if an app with this bundle ID is running
+        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            return NSAppleEventDescriptor(processIdentifier: running.processIdentifier)
+        }
+
+        // App not running — use bundle ID targeting (may launch the app)
+        return NSAppleEventDescriptor(bundleIdentifier: bundleID)
     }
 
     private func resolveBundleIdentifier(_ appName: String) throws -> String {
