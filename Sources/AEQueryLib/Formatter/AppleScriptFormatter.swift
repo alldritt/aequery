@@ -55,11 +55,112 @@ public struct AppleScriptFormatter {
             let formatted = items.map { formatValue($0) }.joined(separator: ", ")
             return "{\(formatted)}"
         case .record(let pairs):
-            let formatted = pairs.map { "\($0.0):\(formatValue($0.1))" }.joined(separator: ", ")
-            return "{\(formatted)}"
+            return formatRecord(pairs)
         case .objectSpecifier:
             return formatSpecifier(value)
         }
+    }
+
+    // MARK: - Record formatting
+
+    private static let wellKnownProperties: [String: String] = [
+        "pcls": "class",
+        "pALL": "properties",
+        "ID  ": "id",
+    ]
+
+    private func formatRecord(_ pairs: [(String, AEValue)]) -> String {
+        let classDef = classDefFromRecord(pairs)
+        let formatted = pairs.map { (key, val) in
+            let fmtKey = formatRecordKey(key, inClass: classDef)
+            let fmtVal = formatRecordValue(val, forPropertyCode: key, inClass: classDef)
+            return "\(fmtKey):\(fmtVal)"
+        }.joined(separator: ", ")
+        return "{\(formatted)}"
+    }
+
+    private func classDefFromRecord(_ pairs: [(String, AEValue)]) -> ClassDef? {
+        guard let dictionary = dictionary else { return nil }
+        for (key, val) in pairs {
+            if key == "pcls", case .string(let code) = val {
+                return dictionary.findClassByCode(code)
+            }
+        }
+        return nil
+    }
+
+    private func formatRecordKey(_ code: String, inClass classDef: ClassDef?) -> String {
+        switch style {
+        case .terminology:
+            if let name = resolvePropertyName(code, inClass: classDef) {
+                return name
+            }
+            return "\u{00AB}property \(code)\u{00BB}"
+        case .chevron:
+            return "\u{00AB}property \(code)\u{00BB}"
+        }
+    }
+
+    private func formatRecordValue(_ val: AEValue, forPropertyCode code: String, inClass classDef: ClassDef?) -> String {
+        guard case .string(let strVal) = val else { return formatValue(val) }
+
+        // missing value
+        if strVal == "msng" {
+            return "missing value"
+        }
+
+        // pcls: format as class reference
+        if code == "pcls" {
+            if style == .terminology, let dict = dictionary, let cls = dict.findClassByCode(strVal) {
+                return cls.name
+            }
+            return "\u{00AB}class \(strVal)\u{00BB}"
+        }
+
+        // Enum-typed properties: resolve enumerator
+        if let propDef = findPropertyDef(forCode: code, inClass: classDef),
+           let propType = propDef.type,
+           let dict = dictionary,
+           let enumDef = dict.findEnumeration(propType),
+           let enumerator = enumDef.enumerators.first(where: { $0.code == strVal }) {
+            if style == .terminology {
+                return enumerator.name
+            }
+            return "\u{00AB}constant \(strVal)\u{00BB}"
+        }
+
+        return formatValue(val)
+    }
+
+    private func resolvePropertyName(_ code: String, inClass classDef: ClassDef?) -> String? {
+        if let dictionary = dictionary {
+            if let classDef = classDef {
+                if let prop = dictionary.findPropertyByCode(code, inClass: classDef) {
+                    return prop.name
+                }
+            }
+            for cls in dictionary.classes.values {
+                if let prop = dictionary.findPropertyByCode(code, inClass: cls) {
+                    return prop.name
+                }
+            }
+        }
+        return Self.wellKnownProperties[code]
+    }
+
+    private func findPropertyDef(forCode code: String, inClass classDef: ClassDef?) -> PropertyDef? {
+        guard let dictionary = dictionary else { return nil }
+        if let classDef = classDef {
+            if let prop = dictionary.findPropertyByCode(code, inClass: classDef) {
+                return prop
+            }
+        }
+        for cls in dictionary.classes.values {
+            if let prop = dictionary.findPropertyByCode(code, inClass: cls) {
+                return prop
+            }
+        }
+        return nil
     }
 
     // MARK: - Object specifier formatting
@@ -91,15 +192,10 @@ public struct AppleScriptFormatter {
         // Property access
         if form == "prop" {
             if case .string(let propCode) = seld {
-                if let dict = dictionary {
-                    // Try to find the property name from any class
-                    for cls in dict.classes.values {
-                        if let prop = dict.findPropertyByCode(propCode, inClass: cls) {
-                            return prop.name
-                        }
-                    }
+                if let name = resolvePropertyName(propCode, inClass: nil) {
+                    return name
                 }
-                return propCode
+                return "\u{00AB}property \(propCode)\u{00BB}"
             }
             return formatValue(seld)
         }
@@ -109,7 +205,7 @@ public struct AppleScriptFormatter {
         if let dict = dictionary, let cls = dict.findClassByCode(want) {
             className = cls.name
         } else {
-            className = want
+            className = "\u{00AB}class \(want)\u{00BB}"
         }
 
         // Index form
