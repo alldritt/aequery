@@ -236,22 +236,6 @@ public struct SDEFLoader {
         throw AEQueryError.appNotFound(appName)
     }
 
-    private func bundleIDForName(_ name: String) -> String {
-        let wellKnown: [String: String] = [
-            "finder": "com.apple.finder",
-            "safari": "com.apple.Safari",
-            "textedit": "com.apple.TextEdit",
-            "mail": "com.apple.mail",
-            "music": "com.apple.Music",
-            "system events": "com.apple.systemevents",
-            "terminal": "com.apple.Terminal",
-            "notes": "com.apple.Notes",
-            "calendar": "com.apple.iCal",
-            "preview": "com.apple.Preview",
-            "xcode": "com.apple.dt.Xcode",
-        ]
-        return wellKnown[name.lowercased()] ?? "com.apple.\(name)"
-    }
 
     private func loadSDEFFromBundle(_ appPath: String) throws -> Data? {
         let bundle = Bundle(path: appPath)
