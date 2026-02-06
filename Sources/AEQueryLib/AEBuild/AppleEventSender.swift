@@ -11,7 +11,7 @@ public struct AppleEventSender {
 
     /// Send a 'get' Apple Event for the given object specifier to the target app.
     /// - Parameter timeoutSeconds: Timeout in seconds (default 120). Use -1 for no timeout, -2 for system default.
-    public func sendGetEvent(to appName: String, specifier: NSAppleEventDescriptor, timeoutSeconds: Int = 120) throws -> NSAppleEventDescriptor {
+    public func sendGetEvent(to appName: String, specifier: NSAppleEventDescriptor, timeoutSeconds: Int = 120, verbose: Bool = false) throws -> NSAppleEventDescriptor {
         let bundleID = try resolveBundleIdentifier(appName)
         let targetApp = NSAppleEventDescriptor(bundleIdentifier: bundleID)
 
@@ -34,10 +34,19 @@ public struct AppleEventSender {
         var mutableDesc = aeDesc
         let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
         let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
+
+        if verbose {
+            FileHandle.standardError.write(Data("AESendMessage returned: \(err)\n".utf8))
+        }
+
         guard err == noErr else {
             throw AEQueryError.appleEventFailed(Int(err), "", nil)
         }
         reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
+
+        if verbose {
+            FileHandle.standardError.write(Data("Reply descriptor: \(reply)\n".utf8))
+        }
 
         // Extract the direct object from the reply
         // The reply is an Apple Event; the result is in the '----' parameter

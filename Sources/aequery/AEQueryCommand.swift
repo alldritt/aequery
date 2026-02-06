@@ -153,7 +153,7 @@ struct AEQueryCommand: ParsableCommand {
             FileHandle.standardError.write("Sending Apple Event to '\(query.appName)' (\(bundleID), timeout: \(timeout)s)...\n")
         }
         do {
-            reply = try sender.sendGetEvent(to: query.appName, specifier: specifier, timeoutSeconds: timeout)
+            reply = try sender.sendGetEvent(to: query.appName, specifier: specifier, timeoutSeconds: timeout, verbose: verbose)
         } catch let error as AEQueryError {
             if case .appleEventFailed(let code, _, let obj) = error {
                 let asFormatter = AppleScriptFormatter(style: .terminology, dictionary: dictionary, appName: query.appName)
