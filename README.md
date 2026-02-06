@@ -18,7 +18,7 @@ swift build
 ## Usage
 
 ```
-aequery [--json | --text | --applescript | --chevron] [--flatten] [--unique] [--verbose] [--dry-run] [--sdef] [--find-paths] '<expression>'
+aequery [--json | --text | --applescript | --chevron] [--flatten] [--unique] [--verbose] [--dry-run] [--sdef] [--find-paths] [--sdef-file <path>] '<expression>'
 ```
 
 ### Flags
@@ -35,6 +35,7 @@ aequery [--json | --text | --applescript | --chevron] [--flatten] [--unique] [--
 | `--dry-run` | Parse and resolve only, do not send Apple Events |
 | `--sdef` | Print the SDEF definition for the resolved element or property |
 | `--find-paths` | Find all valid paths from the application root to the target |
+| `--sdef-file <path>` | Load SDEF from a file path instead of from the application bundle |
 
 ## Expression Syntax
 
@@ -161,6 +162,12 @@ aequery --find-paths '/Finder/name'
 # /Finder/files/name
 # /Finder/windows/name
 # ...
+
+# Load SDEF from a file (app doesn't need to be installed)
+/usr/bin/sdef /System/Applications/Contacts.app > /tmp/contacts.sdef
+aequery --sdef-file /tmp/contacts.sdef --dry-run '/Contacts/people'
+aequery --sdef-file /tmp/contacts.sdef --sdef '/Contacts/people'
+aequery --sdef-file /tmp/contacts.sdef --find-paths '/Contacts/people'
 ```
 
 ## Architecture
