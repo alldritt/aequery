@@ -76,15 +76,106 @@ public struct OutputFormatter {
         case .date(let d): return ISO8601DateFormatter().string(from: d)
         case .list(let items): return items.map { toJSONValue($0) }
         case .record(let pairs):
+            let classDef = resolveClassFromRecord(pairs)
             var dict: [String: Any] = [:]
             for (key, val) in pairs {
-                dict[key] = toJSONValue(val)
+                let resolvedKey = resolvePropertyCode(key, inClass: classDef)
+                let resolvedVal = resolveRecordValue(val, forPropertyCode: key, inClass: classDef)
+                dict[resolvedKey] = toJSONValue(resolvedVal)
             }
             return dict
         case .null: return NSNull()
         case .objectSpecifier:
             return specifierToXPath(value)
         }
+    }
+
+    // MARK: - Record key/value resolution
+
+    /// Look up the class definition from the pcls key in a record.
+    private func resolveClassFromRecord(_ pairs: [(String, AEValue)]) -> ClassDef? {
+        guard let dictionary = dictionary else { return nil }
+        for (key, val) in pairs {
+            if key == "pcls", case .string(let code) = val {
+                return dictionary.findClassByCode(code)
+            }
+        }
+        return nil
+    }
+
+    // Well-known Apple Event property codes that apps may omit from their SDEF.
+    // These come from the system's "item" and "application" classes in CocoaStandard.sdef.
+    private static let wellKnownProperties: [String: String] = [
+        "pcls": "class",
+        "pALL": "properties",
+        "ID  ": "id",
+    ]
+
+    /// Resolve a 4CC property code to its SDEF name.
+    private func resolvePropertyCode(_ code: String, inClass classDef: ClassDef?) -> String {
+        guard let dictionary = dictionary else {
+            return Self.wellKnownProperties[code] ?? code
+        }
+        // Try the specific class first (includes inherited properties)
+        if let classDef = classDef {
+            if let prop = dictionary.findPropertyByCode(code, inClass: classDef) {
+                return prop.name
+            }
+        }
+        // Fallback: search all classes
+        for cls in dictionary.classes.values {
+            if let prop = dictionary.findPropertyByCode(code, inClass: cls) {
+                return prop.name
+            }
+        }
+        // Last resort: well-known system property codes
+        return Self.wellKnownProperties[code] ?? code
+    }
+
+    /// Resolve a record value using SDEF type information.
+    private func resolveRecordValue(_ val: AEValue, forPropertyCode code: String, inClass classDef: ClassDef?) -> AEValue {
+        guard let dictionary = dictionary, case .string(let strVal) = val else { return val }
+
+        // "missing value" type code → null
+        if strVal == "msng" {
+            return .null
+        }
+
+        // pcls: resolve type code to class name
+        if code == "pcls" {
+            if let cls = dictionary.findClassByCode(strVal) {
+                return .string(cls.name)
+            }
+            return val
+        }
+
+        // Find the property definition to check its declared type
+        let propDef = findPropertyDef(forCode: code, inClass: classDef)
+
+        // If the property type is a known enumeration, resolve the enumerator
+        if let propType = propDef?.type, let enumDef = dictionary.findEnumeration(propType) {
+            if let enumerator = enumDef.enumerators.first(where: { $0.code == strVal }) {
+                return .string(enumerator.name)
+            }
+        }
+
+        return val
+    }
+
+    /// Find the PropertyDef for a given 4CC code, trying the class context first.
+    private func findPropertyDef(forCode code: String, inClass classDef: ClassDef?) -> PropertyDef? {
+        guard let dictionary = dictionary else { return nil }
+        if let classDef = classDef {
+            if let prop = dictionary.findPropertyByCode(code, inClass: classDef) {
+                return prop
+            }
+        }
+        for cls in dictionary.classes.values {
+            if let prop = dictionary.findPropertyByCode(code, inClass: cls) {
+                return prop
+            }
+        }
+        return nil
     }
 
     // MARK: - Text

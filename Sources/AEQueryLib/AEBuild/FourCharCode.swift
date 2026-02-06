@@ -98,8 +98,9 @@ public enum AEConstants {
     public static let cWindow = FourCharCode("cwin")
     public static let cDocument = FourCharCode("docu")
 
-    // Property code
+    // Property codes
     public static let pName = FourCharCode("pnam")
+    public static let pAll = FourCharCode("pALL")
     
     // Error codes
     public static let errorNumber = FourCharCode("errn")

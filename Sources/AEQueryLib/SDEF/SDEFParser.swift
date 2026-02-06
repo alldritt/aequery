@@ -186,14 +186,18 @@ public struct SDEFLoader {
     public func loadSDEF(forApp appName: String) throws -> (ScriptingDictionary, String) {
         let appPath = try resolveAppPath(appName)
 
-        // Try reading .sdef from bundle directly
+        // Prefer /usr/bin/sdef which merges the system Standard Suite definitions
+        // (e.g. the "item" class with "class", "properties" etc.) into the result.
+        if let sdefData = try? loadSDEFViaCommand(appPath) {
+            return (try SDEFParser().parse(data: sdefData), appPath)
+        }
+
+        // Fall back to reading .sdef directly from the bundle
         if let sdefData = try? loadSDEFFromBundle(appPath) {
             return (try SDEFParser().parse(data: sdefData), appPath)
         }
 
-        // Fall back to /usr/bin/sdef command
-        let sdefData = try loadSDEFViaCommand(appPath)
-        return (try SDEFParser().parse(data: sdefData), appPath)
+        throw AEQueryError.sdefLoadFailed(appPath, "No SDEF found")
     }
 
     private func resolveAppPath(_ appName: String) throws -> String {

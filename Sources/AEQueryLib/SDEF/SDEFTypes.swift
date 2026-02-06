@@ -9,8 +9,25 @@ public struct ScriptingDictionary {
 
     public mutating func addClass(_ classDef: ClassDef) {
         let key = classDef.name.lowercased()
-        classes[key] = classDef
-        if let plural = classDef.pluralName {
+        if let existing = classes[key],
+           classDef.inherits?.lowercased() == key {
+            // Self-referential inheritance (e.g., app's "application" inherits
+            // standard suite's "application"). Merge the base class's
+            // properties/elements and continue its inherits chain.
+            let baseInherits = existing.inherits?.lowercased() == key ? nil : existing.inherits
+            classes[key] = ClassDef(
+                name: classDef.name,
+                code: classDef.code,
+                pluralName: classDef.pluralName ?? existing.pluralName,
+                inherits: baseInherits,
+                hidden: classDef.hidden,
+                properties: existing.properties + classDef.properties,
+                elements: existing.elements + classDef.elements
+            )
+        } else {
+            classes[key] = classDef
+        }
+        if let plural = classes[key]?.pluralName {
             pluralToSingular[plural.lowercased()] = key
         }
     }
@@ -51,10 +68,17 @@ public struct ScriptingDictionary {
 
     /// Get the full set of properties for a class, including inherited ones
     public func allProperties(for classDef: ClassDef) -> [PropertyDef] {
+        var visited = Set<String>()
+        return collectProperties(for: classDef, visited: &visited)
+    }
+
+    private func collectProperties(for classDef: ClassDef, visited: inout Set<String>) -> [PropertyDef] {
+        let key = classDef.name.lowercased()
+        guard visited.insert(key).inserted else { return [] }
         var props = classDef.properties
         if let inherits = classDef.inherits {
             if let parent = findClass(inherits) {
-                props.append(contentsOf: allProperties(for: parent))
+                props.append(contentsOf: collectProperties(for: parent, visited: &visited))
             }
         }
         return props
@@ -62,10 +86,17 @@ public struct ScriptingDictionary {
 
     /// Get the full set of elements for a class, including inherited ones
     public func allElements(for classDef: ClassDef) -> [ElementDef] {
+        var visited = Set<String>()
+        return collectElements(for: classDef, visited: &visited)
+    }
+
+    private func collectElements(for classDef: ClassDef, visited: inout Set<String>) -> [ElementDef] {
+        let key = classDef.name.lowercased()
+        guard visited.insert(key).inserted else { return [] }
         var elems = classDef.elements
         if let inherits = classDef.inherits {
             if let parent = findClass(inherits) {
-                elems.append(contentsOf: allElements(for: parent))
+                elems.append(contentsOf: collectElements(for: parent, visited: &visited))
             }
         }
         return elems
