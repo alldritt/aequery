@@ -100,4 +100,9 @@ public enum AEConstants {
 
     // Property code
     public static let pName = FourCharCode("pnam")
+    
+    // Error codes
+    public static let errorNumber = FourCharCode("errn")
+    public static let errorString = FourCharCode("errs")
+    public static let errorOffendingObject = FourCharCode("erob")
 }

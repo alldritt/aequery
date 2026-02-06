@@ -55,15 +55,13 @@ public struct AppleEventSender {
         }
 
         // Check for error in reply before any fallbacks
-        let errKeyword: AEKeyword = 0x6572726E  // 'errn'
-        if let errDesc = reply.paramDescriptor(forKeyword: errKeyword) {
+        if let errDesc = reply.paramDescriptor(forKeyword: AEConstants.errorNumber) {
             let errNum = Int(errDesc.int32Value)
-            let errMsg = reply.paramDescriptor(forKeyword: 0x65727273)?.stringValue  // 'errs'
+            let errMsg = reply.paramDescriptor(forKeyword: AEConstants.errorString)?.stringValue
 
             // Extract offending object ('erob') if present
-            let erobKeyword: AEKeyword = 0x65726F62  // 'erob'
             var offendingObject: AEValue? = nil
-            if let erobDesc = reply.paramDescriptor(forKeyword: erobKeyword) {
+            if let erobDesc = reply.paramDescriptor(forKeyword: AEConstants.errorOffendingObject) {
                 offendingObject = DescriptorDecoder().decode(erobDesc)
             }
 
