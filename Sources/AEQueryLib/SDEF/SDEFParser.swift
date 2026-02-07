@@ -230,8 +230,8 @@ public struct SDEFLoader {
         process.standardOutput = pipe
         process.standardError = Pipe()
         try process.run()
-        process.waitUntilExit()
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        process.waitUntilExit()
         if !output.isEmpty, let first = output.components(separatedBy: "\n").first,
            FileManager.default.fileExists(atPath: first) {
             return first
@@ -266,11 +266,13 @@ public struct SDEFLoader {
         let errPipe = Pipe()
         process.standardError = errPipe
         try process.run()
+        // Read pipes before waitUntilExit to avoid deadlock when output exceeds pipe buffer
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         guard process.terminationStatus == 0, !data.isEmpty else {
-            let errStr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let errStr = String(data: errData, encoding: .utf8) ?? ""
             throw AEQueryError.sdefLoadFailed(appPath, errStr)
         }
         return data
