@@ -100,6 +100,7 @@ public enum AEConstants {
 
     // Event IDs
     public static let kAEDoObjectsExist = FourCharCode("doex")
+    public static let kAESetData = FourCharCode("setd")
 
     // Well-known class codes
     public static let cApplication = FourCharCode("capp")

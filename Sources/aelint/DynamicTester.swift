@@ -71,6 +71,21 @@ struct DynamicTester {
         }
     }
 
+    private func sendSet(
+        _ specifier: NSAppleEventDescriptor,
+        value: NSAppleEventDescriptor,
+        command: String
+    ) throws {
+        logEvent(command)
+        do {
+            try sender.sendSetEvent(to: appName, specifier: specifier, value: value, timeoutSeconds: 10)
+            logResult("ok")
+        } catch {
+            logResult("ERROR: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
     private func logEvent(_ command: String) {
         guard log else { return }
         FileHandle.standardError.write(Data("  \u{2192} \(command)\n".utf8))
@@ -152,6 +167,18 @@ struct DynamicTester {
 
         // Test 9: Validate property return types against SDEF declarations
         findings.append(contentsOf: testTypeValidation())
+
+        // Test 10: Range access (items 1 thru N)
+        findings.append(contentsOf: testRangeAccess())
+
+        // Test 11: Inherited properties
+        findings.append(contentsOf: testInheritedProperties())
+
+        // Test 12: Error handling for invalid references
+        findings.append(contentsOf: testErrorHandling())
+
+        // Test 13: Set property (read-write)
+        findings.append(contentsOf: testSetProperty())
 
         return findings
     }
@@ -1249,5 +1276,395 @@ struct DynamicTester {
 
     private func descTypeString(_ dt: DescType) -> String {
         FourCharCode(dt).stringValue
+    }
+
+    // MARK: - Range access testing
+
+    private func testRangeAccess() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+        var successCount = 0
+        var failCount = 0
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count >= 2 else { continue }
+
+            // Test range: elements 1 thru min(count, 3)
+            let rangeEnd = min(count, 3)
+            let rangeSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byRange(1, rangeEnd),
+                container: NSAppleEventDescriptor.null()
+            )
+            let plural = elemClass.pluralName ?? "\(elemClass.name)s"
+            let cmd = "get \(plural) 1 thru \(rangeEnd) of \(appRef)"
+
+            do {
+                let result = try sendGet(rangeSpec, command: cmd)
+                let resultCount: Int
+                if result.descriptorType == AEConstants.typeAEList {
+                    resultCount = result.numberOfItems
+                } else {
+                    resultCount = 1
+                }
+                successCount += 1
+                if resultCount != rangeEnd {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-range",
+                        message: "\(plural) 1 thru \(rangeEnd): expected \(rangeEnd) items but got \(resultCount)",
+                        context: cmd
+                    ))
+                }
+            } catch {
+                failCount += 1
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-range",
+                    message: "Range access not supported for \(elemClass.name): \(error.localizedDescription)",
+                    context: cmd
+                ))
+            }
+        }
+
+        if successCount > 0 || failCount > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-range",
+                message: "Range access: \(successCount) succeeded, \(failCount) failed"
+            ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Inherited properties testing
+
+    private func testInheritedProperties() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+            guard let parentName = elemClass.inherits else { continue }
+            guard let parentClass = dictionary.findClass(parentName) else { continue }
+
+            // Only test classes that actually inherit from something other than "item"
+            // and where the parent has properties
+            let parentProps = parentClass.properties.filter { !$0.hidden && $0.access != .writeOnly }
+            guard !parentProps.isEmpty else { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+
+            var inheritedSuccess = 0
+            var inheritedFail = 0
+
+            // Test parent-defined properties on the child instance
+            for prop in parentProps {
+                // Skip properties that the child also declares directly (not purely inherited)
+                if elemClass.properties.contains(where: { $0.code == prop.code }) { continue }
+
+                let propSpec = builder.buildPropertySpecifier(code: prop.code, container: firstSpec)
+                let cmd = "get \(prop.name) of \(elemClass.name) 1 of \(appRef)"
+
+                do {
+                    _ = try sendGet(propSpec, command: cmd)
+                    inheritedSuccess += 1
+                } catch {
+                    inheritedFail += 1
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-inherit",
+                        message: "Inherited property '\(prop.name)' (from \(parentName)) failed on \(elemClass.name): \(error.localizedDescription)",
+                        context: cmd
+                    ))
+                }
+            }
+
+            if inheritedSuccess > 0 || inheritedFail > 0 {
+                findings.append(LintFinding(
+                    .info, category: "dynamic-inherit",
+                    message: "\(elemClass.name) inherited properties (from \(parentName)): \(inheritedSuccess) readable, \(inheritedFail) failed"
+                ))
+            }
+        }
+
+        return findings
+    }
+
+    // MARK: - Error handling validation
+
+    private func testErrorHandling() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+        var properErrorCount = 0
+        var badErrorCount = 0
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            // Test 1: Access element at impossibly high index
+            let bogusIndex = 99999
+            let bogusSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(bogusIndex),
+                container: NSAppleEventDescriptor.null()
+            )
+            let nameOfBogus = builder.buildPropertySpecifier(code: "pnam", container: bogusSpec)
+            let cmd = "get name of \(elemClass.name) \(bogusIndex) of \(appRef)"
+
+            do {
+                _ = try sendGet(nameOfBogus, command: cmd)
+                // If it succeeds, the app has 99999+ elements — unlikely but not an error
+            } catch let error as AEQueryError {
+                if case .appleEventFailed(let code, _, _) = error {
+                    // Expected errors: -1719 (invalid index), -1728 (no such object)
+                    if code == -1719 || code == -1728 {
+                        properErrorCount += 1
+                    } else {
+                        badErrorCount += 1
+                        findings.append(LintFinding(
+                            .info, category: "dynamic-error",
+                            message: "\(elemClass.name) \(bogusIndex): unexpected error code \(code) (expected -1719 or -1728)",
+                            context: cmd
+                        ))
+                    }
+                }
+            } catch {
+                badErrorCount += 1
+                findings.append(LintFinding(
+                    .info, category: "dynamic-error",
+                    message: "\(elemClass.name) \(bogusIndex): non-AE error: \(error.localizedDescription)",
+                    context: cmd
+                ))
+            }
+
+            // Test 2: Access element by impossible name
+            let bogusName = "__aelint_\(elemClass.code)_nonexistent__"
+            let bogusNameSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byName(bogusName),
+                container: NSAppleEventDescriptor.null()
+            )
+            let nameOfBogusName = builder.buildPropertySpecifier(code: "pnam", container: bogusNameSpec)
+            let cmd2 = "get name of \(elemClass.name) \"\(bogusName)\" of \(appRef)"
+
+            do {
+                _ = try sendGet(nameOfBogusName, command: cmd2)
+                // Unexpected success — app returned something for a bogus name
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-error",
+                    message: "\(elemClass.name) with bogus name returned data instead of error",
+                    context: cmd2
+                ))
+            } catch let error as AEQueryError {
+                if case .appleEventFailed(let code, _, _) = error {
+                    if code == -1728 || code == -1719 {
+                        properErrorCount += 1
+                    } else {
+                        badErrorCount += 1
+                        findings.append(LintFinding(
+                            .info, category: "dynamic-error",
+                            message: "\(elemClass.name) by bogus name: error code \(code) (expected -1728)",
+                            context: cmd2
+                        ))
+                    }
+                }
+            } catch {
+                badErrorCount += 1
+            }
+        }
+
+        if properErrorCount > 0 || badErrorCount > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-error",
+                message: "Error handling: \(properErrorCount) proper errors, \(badErrorCount) unexpected"
+            ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Set property testing
+
+    private func testSetProperty() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        var successCount = 0
+        var failCount = 0
+        var readOnlyCount = 0
+
+        // Test application-level read-write properties
+        testSetPropertiesOn(
+            container: NSAppleEventDescriptor.null(),
+            containerPath: appRef,
+            classDef: appClass,
+            successCount: &successCount,
+            failCount: &failCount,
+            readOnlyCount: &readOnlyCount,
+            findings: &findings
+        )
+
+        // Test element-level read-write properties (first element of each type)
+        let allElems = dictionary.allElements(for: appClass)
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+            let elemPath = "\(elemClass.name) 1 of \(appRef)"
+
+            testSetPropertiesOn(
+                container: firstSpec,
+                containerPath: elemPath,
+                classDef: elemClass,
+                successCount: &successCount,
+                failCount: &failCount,
+                readOnlyCount: &readOnlyCount,
+                findings: &findings
+            )
+        }
+
+        if successCount > 0 || failCount > 0 || readOnlyCount > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-set",
+                message: "Set property: \(successCount) writable, \(failCount) failed, \(readOnlyCount) effectively read-only"
+            ))
+        }
+
+        return findings
+    }
+
+    private func testSetPropertiesOn(
+        container: NSAppleEventDescriptor,
+        containerPath: String,
+        classDef: ClassDef,
+        successCount: inout Int,
+        failCount: inout Int,
+        readOnlyCount: inout Int,
+        findings: inout [LintFinding]
+    ) {
+        let allProps = dictionary.allProperties(for: classDef)
+
+        // Known read-only property codes that should never be set
+        let knownReadOnlyCodes: Set<String> = [
+            "pnam", "pcls", "ID  ", "pALL", "pisf", "vers", "pbnd",
+        ]
+
+        for prop in allProps {
+            if prop.hidden { continue }
+            // Test properties that are explicitly read-write or have unspecified access (default = read-write)
+            if prop.access == .readOnly || prop.access == .writeOnly { continue }
+            // Skip known read-only properties that apps often don't mark as such
+            if knownReadOnlyCodes.contains(prop.code) { continue }
+
+            let propSpec = builder.buildPropertySpecifier(code: prop.code, container: container)
+            let getCmd = "get \(prop.name) of \(containerPath)"
+
+            let currentValue: NSAppleEventDescriptor
+            do {
+                currentValue = try sendGet(propSpec, command: getCmd)
+            } catch {
+                continue
+            }
+
+            // Skip object specifiers and lists — setting those back is unreliable
+            if currentValue.descriptorType == AEConstants.typeObjectSpecifier { continue }
+            if currentValue.descriptorType == AEConstants.typeAEList { continue }
+
+            let setCmd = "set \(prop.name) of \(containerPath) to \(describeResult(currentValue))"
+            do {
+                try sendSet(propSpec, value: currentValue, command: setCmd)
+                successCount += 1
+            } catch let error as AEQueryError {
+                if case .appleEventFailed(let code, _, _) = error {
+                    // -10000: generic AE error (often means property not settable in current state)
+                    // -10002: handler not found for set
+                    // -10003: read-only object
+                    // -10004: privilege violation
+                    // -10006: permission denied
+                    if [-10000, -10002, -10003, -10004, -10006].contains(code) {
+                        readOnlyCount += 1
+                        findings.append(LintFinding(
+                            .info, category: "dynamic-set",
+                            message: "'\(prop.name)' of \(classDef.name) declared read-write but set is denied (error \(code))",
+                            context: setCmd
+                        ))
+                    } else {
+                        failCount += 1
+                        findings.append(LintFinding(
+                            .warning, category: "dynamic-set",
+                            message: "Cannot set '\(prop.name)' of \(classDef.name): \(error.localizedDescription)",
+                            context: setCmd
+                        ))
+                    }
+                }
+            } catch {
+                failCount += 1
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-set",
+                    message: "Cannot set '\(prop.name)' of \(classDef.name): \(error.localizedDescription)",
+                    context: setCmd
+                ))
+            }
+        }
     }
 }
