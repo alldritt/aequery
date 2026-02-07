@@ -41,6 +41,7 @@ public enum AEQueryError: Error, LocalizedError {
         case -1750: return "Object is not the right type"
         case -1751: return "Can't handle the Apple Event"
         case -600: return "Application is not running"
+        case -609: return "Connection invalid. Check System Settings > Privacy & Security > Automation"
         case -1743: return "Not authorized to send Apple Events to this application. Check System Settings > Privacy & Security > Automation"
         case -10004: return "A privilege violation occurred"
         default: return "Error \(code)"

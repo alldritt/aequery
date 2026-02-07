@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "aequery", targets: ["aequery"]),
+        .executable(name: "aelint", targets: ["aelint"]),
         .library(name: "AEQueryLib", targets: ["AEQueryLib"]),
     ],
     dependencies: [
@@ -14,6 +15,13 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "aequery",
+            dependencies: [
+                "AEQueryLib",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
+        .executableTarget(
+            name: "aelint",
             dependencies: [
                 "AEQueryLib",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),

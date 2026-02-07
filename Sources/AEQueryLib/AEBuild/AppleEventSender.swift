@@ -71,6 +71,56 @@ public struct AppleEventSender {
         return NSAppleEventDescriptor.null()
     }
 
+    /// Send a 'count' Apple Event for elements of a given class within a container.
+    /// Returns the count as an integer.
+    public func sendCountEvent(to appName: String, container: NSAppleEventDescriptor, elementCode: FourCharCode, timeoutSeconds: Int = 30) throws -> Int {
+        let targetApp = try resolveTargetDescriptor(appName)
+
+        // Build core/cnte event
+        let kAECountElements = FourCharCode("cnte")
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: AEConstants.kAECoreSuite,
+            eventID: kAECountElements,
+            targetDescriptor: targetApp,
+            returnID: -1,
+            transactionID: 0
+        )
+
+        // Direct object = container
+        event.setParam(container, forKeyword: AEConstants.keyDirectObject)
+
+        // kocl = class to count
+        let koclKeyword = FourCharCode("kocl")
+        event.setParam(
+            NSAppleEventDescriptor(typeCode: elementCode),
+            forKeyword: koclKeyword
+        )
+
+        // Send
+        var replyEvent = AppleEvent()
+        var mutableDesc = event.aeDesc!.pointee
+        let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
+        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
+
+        guard err == noErr else {
+            throw AEQueryError.appleEventFailed(Int(err), "", nil)
+        }
+        let reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
+
+        if let result = reply.paramDescriptor(forKeyword: AEKeyword(AEConstants.keyDirectObject)) {
+            return Int(result.int32Value)
+        }
+
+        // Check for error
+        if let errDesc = reply.paramDescriptor(forKeyword: AEConstants.errorNumber) {
+            let errNum = Int(errDesc.int32Value)
+            let errMsg = reply.paramDescriptor(forKeyword: AEConstants.errorString)?.stringValue
+            throw AEQueryError.appleEventFailed(errNum, errMsg ?? "", nil)
+        }
+
+        return 0
+    }
+
     /// Resolve app name to a target descriptor, preferring process ID for running apps.
     private func resolveTargetDescriptor(_ appName: String) throws -> NSAppleEventDescriptor {
         // First check running applications by name
