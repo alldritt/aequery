@@ -90,6 +90,11 @@ public struct AppleScriptFormatter {
     }
 
     private func formatRecordKey(_ code: String, inClass classDef: ClassDef?) -> String {
+        // User record field keys (from usrf) are plain string names, not 4CC codes.
+        // A 4CC key is always exactly 4 bytes in Mac Roman encoding.
+        if !isFourCharCode(code) {
+            return code
+        }
         switch style {
         case .terminology:
             if let name = resolvePropertyName(code, inClass: classDef) {
@@ -99,6 +104,11 @@ public struct AppleScriptFormatter {
         case .chevron:
             return "\u{00AB}property \(code)\u{00BB}"
         }
+    }
+
+    private func isFourCharCode(_ key: String) -> Bool {
+        guard let data = key.data(using: .macOSRoman) else { return false }
+        return data.count == 4
     }
 
     private func formatRecordValue(_ val: AEValue, forPropertyCode code: String, inClass classDef: ClassDef?) -> String {
@@ -210,9 +220,12 @@ public struct AppleScriptFormatter {
 
         // Index form
         if form == "indx" {
-            // Check for "every" (kAEAll = 'all ')
-            if case .string(let s) = seld, s == "all " {
-                return "every \(className)"
+            if case .string(let s) = seld {
+                if s == "all " { return "every \(className)" }
+                if s == "last" { return "last \(className)" }
+                if s == "firs" { return "first \(className)" }
+                if s == "midd" { return "middle \(className)" }
+                if s == "sran" { return "some \(className)" }
             }
             if case .integer(let n) = seld {
                 if n == -1 {
@@ -249,8 +262,12 @@ public struct AppleScriptFormatter {
 
         // Index form
         if form == "indx" {
-            if case .string(let s) = seld, s == "all " {
-                return "every \(classRef)"
+            if case .string(let s) = seld {
+                if s == "all " { return "every \(classRef)" }
+                if s == "last" { return "last \(classRef)" }
+                if s == "firs" { return "first \(classRef)" }
+                if s == "midd" { return "middle \(classRef)" }
+                if s == "sran" { return "some \(classRef)" }
             }
             if case .integer(let n) = seld {
                 if n == -1 {

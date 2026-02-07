@@ -259,8 +259,11 @@ public struct OutputFormatter {
             // Properties don't have predicates — the name IS the step
             return ""
         case "indx":
-            if case .string(let s) = seld, s == "all " {
-                return ""  // "every" — no predicate needed
+            if case .string(let s) = seld {
+                // Ordinals: all, last, first, middle, some — no predicate
+                if s == "all " || s == "last" || s == "firs" || s == "midd" || s == "sran" {
+                    return ""
+                }
             }
             if case .integer(let n) = seld {
                 return "[\(n)]"

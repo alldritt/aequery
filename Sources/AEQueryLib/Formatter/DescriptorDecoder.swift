@@ -155,6 +155,15 @@ public struct DescriptorDecoder {
             }
             return .string(descriptor.stringValue ?? "")
 
+        // Absolute ordinal (all, first, last, middle, any)
+        case typeAbsoluteOrdinal:
+            let data = descriptor.data
+            if data.count >= 4 {
+                let val = data.withUnsafeBytes { $0.load(as: UInt32.self) }
+                return .string(FourCharCode(val).stringValue)
+            }
+            return .string("????")
+
         // Type/Enum
         case typeType, typeEnumerated:
             let val = descriptor.typeCodeValue
@@ -193,6 +202,7 @@ private let typeAERecord: UInt32 = 0x7265636F   // 'reco'
 private let typeType: UInt32 = 0x74797065       // 'type'
 private let typeEnumerated: UInt32 = 0x656E756D // 'enum'
 private let typeObjectSpecifier: UInt32 = 0x6F626A20 // 'obj '
+private let typeAbsoluteOrdinal: UInt32 = 0x6162736F // 'abso'
 private let typeFileURL: UInt32 = 0x6675726C         // 'furl'
 private let keyASUserRecordFields: UInt32 = 0x75737266 // 'usrf'
 

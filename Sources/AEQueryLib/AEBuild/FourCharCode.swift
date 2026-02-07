@@ -3,14 +3,18 @@ import Foundation
 public typealias FourCharCode = UInt32
 
 extension FourCharCode {
-    /// Initialize from a 4-character ASCII string like "capp" or "pnam"
+    /// Initialize from a 4-character string like "capp" or "pnam".
+    /// Uses Mac Roman encoding to match Apple Event conventions.
     public init(_ fourCharString: String) {
-        precondition(fourCharString.utf8.count == 4, "FourCharCode requires exactly 4 ASCII characters, got '\(fourCharString)'")
-        let bytes = Array(fourCharString.utf8)
-        self = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+        guard let data = fourCharString.data(using: .macOSRoman), data.count == 4 else {
+            preconditionFailure("FourCharCode requires exactly 4 Mac Roman characters, got '\(fourCharString)'")
+        }
+        self = UInt32(data[0]) << 24 | UInt32(data[1]) << 16 | UInt32(data[2]) << 8 | UInt32(data[3])
     }
 
-    /// Convert back to a 4-character string
+    /// Convert back to a 4-character string.
+    /// Uses Mac Roman encoding since Apple Event four-character codes
+    /// may contain bytes > 127 that are not valid ASCII.
     public var stringValue: String {
         let chars: [UInt8] = [
             UInt8((self >> 24) & 0xFF),
@@ -18,7 +22,7 @@ extension FourCharCode {
             UInt8((self >> 8) & 0xFF),
             UInt8(self & 0xFF),
         ]
-        return String(bytes: chars, encoding: .ascii) ?? "????"
+        return String(bytes: chars, encoding: .macOSRoman) ?? "????"
     }
 }
 
