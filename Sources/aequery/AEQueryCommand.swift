@@ -54,6 +54,10 @@ struct AEQueryCommand: ParsableCommand {
     }
 
     func run() throws {
+        if applescript && chevron {
+            throw AEQueryError.invalidExpression("--applescript and --chevron are mutually exclusive")
+        }
+
         // 1. Lex
         var lexer = Lexer(expression)
         let tokens = try lexer.tokenize()
