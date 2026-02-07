@@ -121,6 +121,45 @@ public struct AppleEventSender {
         return 0
     }
 
+    /// Send an 'exists' Apple Event (core/doex) for the given object specifier.
+    /// Returns true if the object exists, false otherwise.
+    public func sendExistsEvent(to appName: String, specifier: NSAppleEventDescriptor, timeoutSeconds: Int = 30) throws -> Bool {
+        let targetApp = try resolveTargetDescriptor(appName)
+
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: AEConstants.kAECoreSuite,
+            eventID: AEConstants.kAEDoObjectsExist,
+            targetDescriptor: targetApp,
+            returnID: -1,
+            transactionID: 0
+        )
+
+        event.setParam(specifier, forKeyword: AEConstants.keyDirectObject)
+
+        var replyEvent = AppleEvent()
+        var mutableDesc = event.aeDesc!.pointee
+        let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
+        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
+
+        guard err == noErr else {
+            throw AEQueryError.appleEventFailed(Int(err), "", nil)
+        }
+        let reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
+
+        if let result = reply.paramDescriptor(forKeyword: AEKeyword(AEConstants.keyDirectObject)) {
+            return result.booleanValue
+        }
+
+        // Check for error
+        if let errDesc = reply.paramDescriptor(forKeyword: AEConstants.errorNumber) {
+            let errNum = Int(errDesc.int32Value)
+            let errMsg = reply.paramDescriptor(forKeyword: AEConstants.errorString)?.stringValue
+            throw AEQueryError.appleEventFailed(errNum, errMsg ?? "", nil)
+        }
+
+        return false
+    }
+
     /// Resolve app name to a target descriptor, preferring process ID for running apps.
     private func resolveTargetDescriptor(_ appName: String) throws -> NSAppleEventDescriptor {
         // First check running applications by name

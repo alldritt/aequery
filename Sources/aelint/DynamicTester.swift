@@ -36,8 +36,20 @@ struct DynamicTester {
         // Test 4: Test access forms (by index, by name) on elements
         findings.append(contentsOf: testAccessForms())
 
-        // Test 5: Count sub-elements one level deeper
+        // Test 5: Recursive sub-element exploration
         findings.append(contentsOf: testSubElements())
+
+        // Test 6: Test every-element retrieval
+        findings.append(contentsOf: testEveryElementRetrieval())
+
+        // Test 7: Test whose clause filtering
+        findings.append(contentsOf: testWhoseClause())
+
+        // Test 8: Test exists event
+        findings.append(contentsOf: testExistsEvent())
+
+        // Test 9: Validate property return types against SDEF declarations
+        findings.append(contentsOf: testTypeValidation())
 
         return findings
     }
@@ -826,5 +838,364 @@ struct DynamicTester {
         )
 
         return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
+    }
+
+    // MARK: - Every element retrieval
+
+    /// Test that `get every <element>` works (not just counting).
+    /// Some apps support counting but not bulk retrieval.
+    private func testEveryElementRetrieval() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+        var successCount = 0
+        var failCount = 0
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+
+            // Only test element types we know have instances
+            let count: Int
+            do {
+                count = try sender.sendCountEvent(
+                    to: appName,
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    timeoutSeconds: 10
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            // Test: get every <element>
+            let everySpec = builder.buildEveryElement(
+                code: elemClass.code,
+                container: NSAppleEventDescriptor.null()
+            )
+
+            do {
+                let result = try sender.sendGetEvent(to: appName, specifier: everySpec, timeoutSeconds: 10)
+                let resultCount: Int
+                if result.descriptorType == AEConstants.typeAEList {
+                    resultCount = result.numberOfItems
+                } else {
+                    resultCount = 1
+                }
+                successCount += 1
+                if resultCount != count {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-every",
+                        message: "every \(elemClass.name): count returned \(count) but get every returned \(resultCount) items"
+                    ))
+                }
+            } catch {
+                failCount += 1
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-every",
+                    message: "Cannot get every \(elemClass.name): \(error.localizedDescription)"
+                ))
+            }
+        }
+
+        findings.append(LintFinding(
+            .info, category: "dynamic-every",
+            message: "Every-element retrieval: \(successCount) succeeded, \(failCount) failed"
+        ))
+
+        return findings
+    }
+
+    // MARK: - Whose clause testing
+
+    /// Test filter-based element access using whose clauses.
+    private func testWhoseClause() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+
+            // Only test element types with instances
+            let count: Int
+            do {
+                count = try sender.sendCountEvent(
+                    to: appName,
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    timeoutSeconds: 10
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            // Need the name property to build a whose clause
+            let allProps = dictionary.allProperties(for: elemClass)
+            guard allProps.contains(where: { $0.code == "pnam" }) else { continue }
+
+            // Get name of first element
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+            let nameSpec = builder.buildPropertySpecifier(code: "pnam", container: firstSpec)
+
+            guard let nameReply = try? sender.sendGetEvent(to: appName, specifier: nameSpec, timeoutSeconds: 10),
+                  let name = nameReply.stringValue, !name.isEmpty else {
+                continue
+            }
+
+            // Test: <elements> whose name = "<name>"
+            let testExpr = TestExpr(path: ["name"], op: .equal, value: .string(name))
+            let whoseSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .test(testExpr),
+                container: NSAppleEventDescriptor.null()
+            )
+
+            // Try to get name of the whose result
+            let whoseNameSpec = builder.buildPropertySpecifier(code: "pnam", container: whoseSpec)
+            do {
+                let result = try sender.sendGetEvent(to: appName, specifier: whoseNameSpec, timeoutSeconds: 10)
+                // Result may be a single value or a list
+                let resultNames: [String]
+                if result.descriptorType == AEConstants.typeAEList {
+                    resultNames = (1...result.numberOfItems).compactMap {
+                        result.atIndex($0)?.stringValue
+                    }
+                } else {
+                    resultNames = [result.stringValue].compactMap { $0 }
+                }
+
+                let matched = resultNames.contains(name)
+                if matched {
+                    findings.append(LintFinding(
+                        .info, category: "dynamic-whose",
+                        message: "\(elemClass.pluralName ?? elemClass.name) whose name = \"\(name)\": found \(resultNames.count) match(es)"
+                    ))
+                } else {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-whose",
+                        message: "\(elemClass.name) whose clause returned unexpected results for name = \"\(name)\""
+                    ))
+                }
+            } catch {
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-whose",
+                    message: "\(elemClass.name) whose clause not supported: \(error.localizedDescription)"
+                ))
+            }
+        }
+
+        return findings
+    }
+
+    // MARK: - Exists event testing
+
+    /// Test the 'exists' Apple Event (core/doex) on elements.
+    private func testExistsEvent() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+        var successCount = 0
+        var failCount = 0
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sender.sendCountEvent(
+                    to: appName,
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    timeoutSeconds: 10
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            // Test: exists <first element> — should return true
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+
+            do {
+                let exists = try sender.sendExistsEvent(to: appName, specifier: firstSpec, timeoutSeconds: 10)
+                if exists {
+                    successCount += 1
+                } else {
+                    failCount += 1
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-exists",
+                        message: "exists \(elemClass.name) 1 returned false (expected true, count = \(count))"
+                    ))
+                }
+            } catch {
+                failCount += 1
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-exists",
+                    message: "exists \(elemClass.name) 1 failed: \(error.localizedDescription)"
+                ))
+            }
+
+            // Test: exists <element by impossible name> — should return false
+            let bogusSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byName("__aelint_nonexistent_\(UUID().uuidString)__"),
+                container: NSAppleEventDescriptor.null()
+            )
+
+            do {
+                let exists = try sender.sendExistsEvent(to: appName, specifier: bogusSpec, timeoutSeconds: 10)
+                if !exists {
+                    // Correct: nonexistent element reports false
+                } else {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-exists",
+                        message: "exists \(elemClass.name) with bogus name returned true (expected false)"
+                    ))
+                }
+            } catch {
+                // Some apps throw an error instead of returning false for nonexistent — that's acceptable
+            }
+        }
+
+        findings.append(LintFinding(
+            .info, category: "dynamic-exists",
+            message: "Exists event: \(successCount) succeeded, \(failCount) failed"
+        ))
+
+        return findings
+    }
+
+    // MARK: - Type validation
+
+    /// Check that property return types match their SDEF-declared types.
+    private func testTypeValidation() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allProps = dictionary.allProperties(for: appClass)
+        var matchCount = 0
+        var mismatchCount = 0
+        var uncheckCount = 0
+
+        for prop in allProps {
+            if prop.hidden { continue }
+            if prop.access == .writeOnly { continue }
+            guard let declaredType = prop.type else {
+                uncheckCount += 1
+                continue
+            }
+
+            let propSpec = builder.buildPropertySpecifier(
+                code: prop.code,
+                container: NSAppleEventDescriptor.null()
+            )
+
+            let reply: NSAppleEventDescriptor
+            do {
+                reply = try sender.sendGetEvent(to: appName, specifier: propSpec, timeoutSeconds: 10)
+            } catch {
+                continue  // read failures already reported
+            }
+
+            let actualType = reply.descriptorType
+            if isTypeCompatible(declaredType: declaredType, actualDescType: actualType) {
+                matchCount += 1
+            } else {
+                mismatchCount += 1
+                let actualStr = descTypeString(actualType)
+                findings.append(LintFinding(
+                    .info, category: "dynamic-type",
+                    message: "Property '\(prop.name)' declared as '\(declaredType)' but returned descriptor type '\(actualStr)'"
+                ))
+            }
+        }
+
+        if matchCount > 0 || mismatchCount > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-type",
+                message: "Application property types: \(matchCount) match, \(mismatchCount) mismatch, \(uncheckCount) untyped"
+            ))
+        }
+
+        return findings
+    }
+
+    /// Check whether a returned descriptor type is compatible with the SDEF-declared type.
+    private func isTypeCompatible(declaredType: String, actualDescType: DescType) -> Bool {
+        let lower = declaredType.lowercased()
+        let actual = FourCharCode(actualDescType)
+        let actualStr = actual.stringValue
+
+        switch lower {
+        case "text", "string":
+            return ["utxt", "TEXT", "ctxt", "utf8", "itxt"].contains(actualStr)
+        case "integer":
+            return ["long", "shor", "comp", "magn"].contains(actualStr)
+        case "real":
+            return ["doub", "sing", "exte", "ldbl"].contains(actualStr)
+        case "number":
+            return ["long", "shor", "comp", "magn", "doub", "sing"].contains(actualStr)
+        case "boolean":
+            return ["bool", "true", "fals"].contains(actualStr)
+        case "date":
+            return actualStr == "ldt "
+        case "file", "alias":
+            return ["alis", "furl", "bmrk", "fss "].contains(actualStr)
+        case "type", "type class":
+            return actualStr == "type"
+        case "record":
+            return actualStr == "reco"
+        case "list":
+            return actualStr == "list"
+        case "point":
+            return actualStr == "QDpt"
+        case "rectangle":
+            return actualStr == "qdrt"
+        case "rgb color", "color":
+            return ["cRGB", "tr16"].contains(actualStr)
+        case "specifier", "reference", "location specifier":
+            return actualStr == "obj "
+        case "any", "missing value":
+            return true  // any type is acceptable
+        default:
+            // Check if declared type is a class name → expect object specifier
+            if dictionary.findClass(declaredType) != nil {
+                return actualStr == "obj "
+            }
+            // Check if declared type is an enumeration → expect typeEnumerated
+            if dictionary.findEnumeration(declaredType) != nil {
+                return actualStr == "enum"
+            }
+            return true  // unknown types pass by default
+        }
+    }
+
+    /// Convert a DescType to a 4-character string for display.
+    private func descTypeString(_ dt: DescType) -> String {
+        FourCharCode(dt).stringValue
     }
 }

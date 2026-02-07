@@ -98,6 +98,9 @@ public enum AEConstants {
     public static let keyDirectObject = FourCharCode("----")
     public static let keyAERequestedType = FourCharCode("rtyp")
 
+    // Event IDs
+    public static let kAEDoObjectsExist = FourCharCode("doex")
+
     // Well-known class codes
     public static let cApplication = FourCharCode("capp")
     public static let cWindow = FourCharCode("cwin")
