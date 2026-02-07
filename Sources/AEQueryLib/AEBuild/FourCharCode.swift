@@ -50,6 +50,7 @@ public enum AEConstants {
     public static let typeCompDescriptor = FourCharCode("cmpd")
     public static let typeLogicalDescriptor = FourCharCode("logi")
     public static let typeRangeDescriptor = FourCharCode("rang")
+    public static let typeAEList = FourCharCode("list")
 
     // Ordinals
     public static let kAEAll = FourCharCode("all ")

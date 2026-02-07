@@ -133,8 +133,10 @@ struct SDEFValidator {
     // MARK: - Element/property name clashes
 
     /// Find classes where an element and property share the same name.
+    /// Uses a set to deduplicate clashes that appear identically across inherited classes.
     private func checkElementPropertyNameClashes() -> [LintFinding] {
         var findings: [LintFinding] = []
+        var seen = Set<String>()  // "className:clashName" to deduplicate
 
         for cls in dictionary.classes.values {
             let allProps = dictionary.allProperties(for: cls)
@@ -142,11 +144,12 @@ struct SDEFValidator {
 
             let propNames = Set(allProps.map { $0.name.lowercased() })
             for elem in allElems {
-                // Element type name or plural name
                 if let elemClass = dictionary.findClass(elem.type) {
                     let names = [elemClass.name.lowercased(), elemClass.pluralName?.lowercased()].compactMap { $0 }
                     for name in names {
                         if propNames.contains(name) {
+                            let key = "\(cls.name.lowercased()):\(name)"
+                            guard seen.insert(key).inserted else { continue }
                             findings.append(LintFinding(
                                 .warning, category: "name-clash",
                                 message: "'\(name)' is both an element and a property in class '\(cls.name)'"
