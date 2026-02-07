@@ -5,16 +5,118 @@ struct DynamicTester {
     let dictionary: ScriptingDictionary
     let appName: String
     let maxDepth: Int
+    let log: Bool
 
     private let sender = AppleEventSender()
     private let builder: ObjectSpecifierBuilder
 
-    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int) {
+    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int, log: Bool = false) {
         self.dictionary = dictionary
         self.appName = appName
         self.maxDepth = maxDepth
+        self.log = log
         self.builder = ObjectSpecifierBuilder(dictionary: dictionary)
     }
+
+    // MARK: - Apple Event wrappers with logging
+
+    private var appRef: String { "application \"\(appName)\"" }
+
+    @discardableResult
+    private func sendGet(
+        _ specifier: NSAppleEventDescriptor,
+        command: String
+    ) throws -> NSAppleEventDescriptor {
+        logEvent(command)
+        do {
+            let result = try sender.sendGetEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
+            logResult(describeResult(result))
+            return result
+        } catch {
+            logResult("ERROR: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private func sendCount(
+        container: NSAppleEventDescriptor,
+        elementCode: FourCharCode,
+        command: String
+    ) throws -> Int {
+        logEvent(command)
+        do {
+            let count = try sender.sendCountEvent(
+                to: appName, container: container, elementCode: elementCode, timeoutSeconds: 10
+            )
+            logResult("\(count)")
+            return count
+        } catch {
+            logResult("ERROR: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private func sendExists(
+        _ specifier: NSAppleEventDescriptor,
+        command: String
+    ) throws -> Bool {
+        logEvent(command)
+        do {
+            let exists = try sender.sendExistsEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
+            logResult("\(exists)")
+            return exists
+        } catch {
+            logResult("ERROR: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private func logEvent(_ command: String) {
+        guard log else { return }
+        FileHandle.standardError.write(Data("  \u{2192} \(command)\n".utf8))
+    }
+
+    private func logResult(_ result: String) {
+        guard log else { return }
+        FileHandle.standardError.write(Data("  \u{2190} \(result)\n".utf8))
+    }
+
+    private func describeResult(_ desc: NSAppleEventDescriptor) -> String {
+        if desc.descriptorType == AEConstants.typeAEList {
+            let count = desc.numberOfItems
+            if count == 0 { return "{}" }
+            var items: [String] = []
+            for i in 1...min(3, count) {
+                if let item = desc.atIndex(i) {
+                    items.append(describeResult(item))
+                }
+            }
+            if count > 3 { items.append("...") }
+            return "{\(items.joined(separator: ", "))} (\(count) items)"
+        }
+        if desc.descriptorType == AEConstants.typeObjectSpecifier {
+            return "<object specifier>"
+        }
+        if let str = desc.stringValue {
+            if str.count > 60 {
+                return "\"\(str.prefix(57))...\""
+            }
+            return "\"\(str)\""
+        }
+        let dt = desc.descriptorType
+        if dt == typeType(for: "bool") || dt == typeType(for: "true") || dt == typeType(for: "fals") {
+            return desc.booleanValue ? "true" : "false"
+        }
+        if dt == typeType(for: "long") || dt == typeType(for: "shor") {
+            return "\(desc.int32Value)"
+        }
+        if dt == typeType(for: "null") {
+            return "missing value"
+        }
+        return "<\(FourCharCode(dt).stringValue)>"
+    }
+
+    // MARK: - Test runner
 
     func runTests(pathFinder: SDEFPathFinder) -> [LintFinding] {
         var findings: [LintFinding] = []
@@ -57,28 +159,23 @@ struct DynamicTester {
     // MARK: - App reachability
 
     private func verifyAppReachable(_ findings: inout [LintFinding]) -> Bool {
-        // Try to get the application's name property
         let nameSpec = builder.buildPropertySpecifier(
             code: "pnam",
             container: NSAppleEventDescriptor.null()
         )
+        let cmd = "get name of \(appRef)"
         do {
-            _ = try sender.sendGetEvent(to: appName, specifier: nameSpec, timeoutSeconds: 10)
+            _ = try sendGet(nameSpec, command: cmd)
             findings.append(LintFinding(
                 .info, category: "dynamic",
                 message: "Application '\(appName)' is running and responding to Apple Events"
             ))
             return true
-        } catch let error as AEQueryError {
-            findings.append(LintFinding(
-                .error, category: "dynamic",
-                message: "Cannot reach application '\(appName)': \(error.localizedDescription)"
-            ))
-            return false
         } catch {
             findings.append(LintFinding(
                 .error, category: "dynamic",
-                message: "Cannot reach application '\(appName)': \(error.localizedDescription)"
+                message: "Cannot reach application '\(appName)': \(error.localizedDescription)",
+                context: cmd
             ))
             return false
         }
@@ -103,28 +200,23 @@ struct DynamicTester {
 
         for prop in allProps {
             if prop.hidden { continue }
-            // Skip write-only properties
             if prop.access == .writeOnly { continue }
 
             let specifier = builder.buildPropertySpecifier(
                 code: prop.code,
                 container: NSAppleEventDescriptor.null()
             )
+            let cmd = "get \(prop.name) of \(appRef)"
 
             do {
-                _ = try sender.sendGetEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
+                _ = try sendGet(specifier, command: cmd)
                 successCount += 1
-            } catch let error as AEQueryError {
-                failCount += 1
-                findings.append(LintFinding(
-                    .warning, category: "dynamic-property",
-                    message: "Cannot get application property '\(prop.name)' (\(prop.code)): \(error.localizedDescription)"
-                ))
             } catch {
                 failCount += 1
                 findings.append(LintFinding(
                     .warning, category: "dynamic-property",
-                    message: "Cannot get application property '\(prop.name)' (\(prop.code)): \(error.localizedDescription)"
+                    message: "Cannot get application property '\(prop.name)' (\(prop.code)): \(error.localizedDescription)",
+                    context: cmd
                 ))
             }
         }
@@ -155,30 +247,25 @@ struct DynamicTester {
             guard let elemClass = dictionary.findClass(elem.type) else { continue }
 
             let elementCode = FourCharCode(elemClass.code)
+            let cmd = "count every \(elemClass.name) of \(appRef)"
 
             do {
-                let count = try sender.sendCountEvent(
-                    to: appName,
+                let count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: cmd
                 )
                 successCount += 1
                 findings.append(LintFinding(
                     .info, category: "dynamic-count",
                     message: "count of \(elemClass.pluralName ?? elemClass.name): \(count)"
                 ))
-            } catch let error as AEQueryError {
-                failCount += 1
-                findings.append(LintFinding(
-                    .warning, category: "dynamic-count",
-                    message: "Cannot count '\(elemClass.name)' elements (\(elemClass.code)): \(error.localizedDescription)"
-                ))
             } catch {
                 failCount += 1
                 findings.append(LintFinding(
                     .warning, category: "dynamic-count",
-                    message: "Cannot count '\(elemClass.name)' elements (\(elemClass.code)): \(error.localizedDescription)"
+                    message: "Cannot count '\(elemClass.name)' elements (\(elemClass.code)): \(error.localizedDescription)",
+                    context: cmd
                 ))
             }
         }
@@ -193,8 +280,6 @@ struct DynamicTester {
 
     // MARK: - First element properties
 
-    /// For each countable element type of application with count > 0,
-    /// get the first element and test reading its properties.
     private func testFirstElementProperties() -> [LintFinding] {
         var findings: [LintFinding] = []
 
@@ -211,22 +296,19 @@ struct DynamicTester {
 
             let elementCode = FourCharCode(elemClass.code)
 
-            // First check if there are any elements
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: "count every \(elemClass.name) of \(appRef)"
                 )
             } catch {
-                continue  // already reported in testApplicationElements
+                continue
             }
 
             guard count > 0 else { continue }
 
-            // Get properties of first element
             let firstElemSpec = builder.buildElementWithPredicate(
                 code: elemClass.code,
                 predicate: .byIndex(1),
@@ -245,15 +327,17 @@ struct DynamicTester {
                     code: prop.code,
                     container: firstElemSpec
                 )
+                let cmd = "get \(prop.name) of \(elemClass.name) 1 of \(appRef)"
 
                 do {
-                    _ = try sender.sendGetEvent(to: appName, specifier: propSpec, timeoutSeconds: 10)
+                    _ = try sendGet(propSpec, command: cmd)
                     propSuccess += 1
                 } catch {
                     propFail += 1
                     findings.append(LintFinding(
                         .warning, category: "dynamic-element-prop",
-                        message: "Cannot get property '\(prop.name)' of first \(elemClass.name): \(error.localizedDescription)"
+                        message: "Cannot get property '\(prop.name)' of first \(elemClass.name): \(error.localizedDescription)",
+                        context: cmd
                     ))
                 }
             }
@@ -271,7 +355,6 @@ struct DynamicTester {
 
     // MARK: - Access form testing
 
-    /// Test different access forms (by index, by name, by ID) on elements that have instances.
     private func testAccessForms() -> [LintFinding] {
         var findings: [LintFinding] = []
 
@@ -288,14 +371,12 @@ struct DynamicTester {
 
             let elementCode = FourCharCode(elemClass.code)
 
-            // Check if there are any elements
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: "count every \(elemClass.name) of \(appRef)"
                 )
             } catch {
                 continue
@@ -321,9 +402,8 @@ struct DynamicTester {
                     code: "pnam",
                     container: firstElemSpec
                 )
-                if let nameReply = try? sender.sendGetEvent(to: appName, specifier: nameSpec, timeoutSeconds: 10),
+                if let nameReply = try? sendGet(nameSpec, command: "get name of \(elemClass.name) 1 of \(appRef)"),
                    let name = nameReply.stringValue, !name.isEmpty {
-                    // Now try to access by that name
                     let byNameSpec = builder.buildElementWithPredicate(
                         code: elemClass.code,
                         predicate: .byName(name),
@@ -333,13 +413,13 @@ struct DynamicTester {
                         code: "pnam",
                         container: byNameSpec
                     )
-                    if let _ = try? sender.sendGetEvent(to: appName, specifier: byNamePropSpec, timeoutSeconds: 10) {
+                    if let _ = try? sendGet(byNamePropSpec, command: "get name of \(elemClass.name) \"\(name)\" of \(appRef)") {
                         forms.append("by name")
                     }
                 }
             }
 
-            // Test by-ID: check if class has an 'id' property (ID  )
+            // Test by-ID
             let hasIDProp = allProps.contains { $0.code == "ID  " }
             if hasIDProp {
                 let firstElemSpec = builder.buildElementWithPredicate(
@@ -351,8 +431,7 @@ struct DynamicTester {
                     code: "ID  ",
                     container: firstElemSpec
                 )
-                if let idReply = try? sender.sendGetEvent(to: appName, specifier: idSpec, timeoutSeconds: 10) {
-                    // Try to use the ID to access the element
+                if let idReply = try? sendGet(idSpec, command: "get id of \(elemClass.name) 1 of \(appRef)") {
                     let idValue: Value
                     if idReply.descriptorType == typeType(for: "long") || idReply.descriptorType == typeType(for: "shor") {
                         idValue = .integer(Int(idReply.int32Value))
@@ -371,7 +450,8 @@ struct DynamicTester {
                         code: "pnam",
                         container: byIDSpec
                     )
-                    if let _ = try? sender.sendGetEvent(to: appName, specifier: byIDPropSpec, timeoutSeconds: 10) {
+                    let idStr = idValue == .integer(Int(idReply.int32Value)) ? "\(idReply.int32Value)" : "\"\(idReply.stringValue ?? "")\""
+                    if let _ = try? sendGet(byIDPropSpec, command: "get name of \(elemClass.name) id \(idStr) of \(appRef)") {
                         forms.append("by ID")
                     }
                 }
@@ -394,7 +474,6 @@ struct DynamicTester {
 
     // MARK: - Sub-element exploration
 
-    /// Recursively explore sub-elements, testing property chaining and list access forms.
     private func testSubElements() -> [LintFinding] {
         var findings: [LintFinding] = []
         guard let appClass = dictionary.findClass("application") else { return findings }
@@ -411,14 +490,13 @@ struct DynamicTester {
             let elementCode = FourCharCode(elemClass.code)
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: "count every \(elemClass.name) of \(appRef)"
                 )
             } catch {
-                continue  // already reported in earlier tests
+                continue
             }
             guard count > 0 else { continue }
 
@@ -441,14 +519,6 @@ struct DynamicTester {
         return findings
     }
 
-    /// Recursively explore an object's properties and sub-elements.
-    /// - Parameters:
-    ///   - specifier: The object specifier for the current object
-    ///   - className: The SDEF class name of this object
-    ///   - path: Human-readable path description for reporting
-    ///   - depth: Current recursion depth
-    ///   - visited: Set of class names already explored (cycle detection)
-    ///   - findings: Accumulated lint findings
     private func exploreObject(
         specifier: NSAppleEventDescriptor,
         className: String,
@@ -470,10 +540,8 @@ struct DynamicTester {
 
         guard let classDef = dictionary.findClass(className) else { return }
 
-        // Test properties that return object specifiers or lists
         testPropertyChaining(classDef: classDef, container: specifier, path: path, findings: &findings)
 
-        // Explore sub-elements
         let allElems = dictionary.allElements(for: classDef)
         var subElemSuccess = 0
         var subElemFail = 0
@@ -484,20 +552,21 @@ struct DynamicTester {
             if elemClass.hidden { continue }
 
             let elementCode = FourCharCode(elemClass.code)
+            let cmd = "count every \(elemClass.name) of \(path) of \(appRef)"
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: specifier,
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: cmd
                 )
                 subElemSuccess += 1
             } catch {
                 subElemFail += 1
                 findings.append(LintFinding(
                     .warning, category: "dynamic-explore",
-                    message: "Cannot count \(elemClass.name) elements of \(path): \(error.localizedDescription)"
+                    message: "Cannot count \(elemClass.name) elements of \(path): \(error.localizedDescription)",
+                    context: cmd
                 ))
                 continue
             }
@@ -535,8 +604,6 @@ struct DynamicTester {
 
     // MARK: - Property chaining (object specifier and list results)
 
-    /// For each readable property, check if the result is an object specifier or a list,
-    /// and test chained access patterns.
     private func testPropertyChaining(
         classDef: ClassDef,
         container: NSAppleEventDescriptor,
@@ -550,16 +617,16 @@ struct DynamicTester {
             if prop.access == .writeOnly { continue }
 
             let propSpec = builder.buildPropertySpecifier(code: prop.code, container: container)
+            let cmd = "get \(prop.name) of \(path) of \(appRef)"
 
             let reply: NSAppleEventDescriptor
             do {
-                reply = try sender.sendGetEvent(to: appName, specifier: propSpec, timeoutSeconds: 10)
+                reply = try sendGet(propSpec, command: cmd)
             } catch {
-                continue  // property read failures already reported in earlier tests
+                continue
             }
 
             if reply.descriptorType == AEConstants.typeObjectSpecifier {
-                // Property returns an object specifier — test chained access
                 testPropertyOfProperty(
                     propName: prop.name, propType: prop.type, propSpec: propSpec,
                     path: path, findings: &findings
@@ -569,7 +636,6 @@ struct DynamicTester {
                     path: path, findings: &findings
                 )
             } else if reply.descriptorType == AEConstants.typeAEList {
-                // Property returns a list — test item access forms
                 testListAccess(
                     propName: prop.name, propSpec: propSpec, listReply: reply,
                     path: path, findings: &findings
@@ -580,7 +646,6 @@ struct DynamicTester {
 
     // MARK: - Property-of-property
 
-    /// Test whether `name of <property> of <container>` works (property-of-property resolution).
     private func testPropertyOfProperty(
         propName: String,
         propType: String?,
@@ -588,11 +653,11 @@ struct DynamicTester {
         path: String,
         findings: inout [LintFinding]
     ) {
-        // Try getting name of the object returned by this property
         let nameOfPropSpec = builder.buildPropertySpecifier(code: "pnam", container: propSpec)
+        let cmd = "get name of \(propName) of \(path) of \(appRef)"
 
         do {
-            let result = try sender.sendGetEvent(to: appName, specifier: nameOfPropSpec, timeoutSeconds: 10)
+            let result = try sendGet(nameOfPropSpec, command: cmd)
             let nameStr = result.stringValue ?? "(non-string)"
             findings.append(LintFinding(
                 .info, category: "dynamic-chain",
@@ -601,14 +666,14 @@ struct DynamicTester {
         } catch {
             findings.append(LintFinding(
                 .warning, category: "dynamic-chain",
-                message: "property-of-property unsupported: name of \(propName) of \(path): \(error.localizedDescription)"
+                message: "property-of-property unsupported: name of \(propName) of \(path): \(error.localizedDescription)",
+                context: cmd
             ))
         }
     }
 
     // MARK: - Element-of-property
 
-    /// Test whether we can count elements of an object returned by a property.
     private func testElementOfProperty(
         propName: String,
         propType: String?,
@@ -616,28 +681,26 @@ struct DynamicTester {
         path: String,
         findings: inout [LintFinding]
     ) {
-        // Look up the property's declared type to find what elements it might have
         guard let typeName = propType,
               let targetClass = dictionary.findClass(typeName) else {
-            return  // Can't determine elements without knowing the class
+            return
         }
 
         let targetElems = dictionary.allElements(for: targetClass)
         guard !targetElems.isEmpty else { return }
 
-        // Try counting the first element type
         for elem in targetElems {
             if elem.hidden { continue }
             guard let elemClass = dictionary.findClass(elem.type) else { continue }
             if elemClass.hidden { continue }
 
             let elementCode = FourCharCode(elemClass.code)
+            let cmd = "count every \(elemClass.name) of \(propName) of \(path) of \(appRef)"
             do {
-                let count = try sender.sendCountEvent(
-                    to: appName,
+                let count = try sendCount(
                     container: propSpec,
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: cmd
                 )
                 findings.append(LintFinding(
                     .info, category: "dynamic-chain",
@@ -646,16 +709,16 @@ struct DynamicTester {
             } catch {
                 findings.append(LintFinding(
                     .warning, category: "dynamic-chain",
-                    message: "element-of-property unsupported: count \(elemClass.name) of \(propName) of \(path): \(error.localizedDescription)"
+                    message: "element-of-property unsupported: count \(elemClass.name) of \(propName) of \(path): \(error.localizedDescription)",
+                    context: cmd
                 ))
             }
-            break  // Only test the first element type to avoid excessive queries
+            break
         }
     }
 
     // MARK: - List access forms
 
-    /// Test various item access forms on a property that returns a list.
     private func testListAccess(
         propName: String,
         propSpec: NSAppleEventDescriptor,
@@ -666,69 +729,69 @@ struct DynamicTester {
         let listCount = listReply.numberOfItems
         guard listCount > 0 else { return }
 
-        let itemCode = "cobj"  // generic item class
+        let itemCode = "cobj"
+        let listPath = "\(propName) of \(path) of \(appRef)"
 
-        // Track which forms work
         var supported: [String] = []
         var unsupported: [String] = []
 
-        // Test: item 1 of <property> of <path>
+        // item 1
         let item1Spec = builder.buildElementWithPredicate(
             code: itemCode, predicate: .byIndex(1), container: propSpec
         )
-        if testGetItemQuietly(spec: item1Spec) {
+        if testGetItemQuietly(spec: item1Spec, command: "get item 1 of \(listPath)") {
             supported.append("item 1")
         } else {
             unsupported.append("item 1")
         }
 
-        // Test: item -1 of <property> of <path> (negative index, NOT kAELast ordinal)
+        // item -1 (negative index)
         let itemNeg1Spec = buildNegativeIndexElement(code: itemCode, index: -1, container: propSpec)
-        if testGetItemQuietly(spec: itemNeg1Spec) {
+        if testGetItemQuietly(spec: itemNeg1Spec, command: "get item -1 of \(listPath)") {
             supported.append("item -1")
         } else {
             unsupported.append("item -1")
         }
 
-        // Test: every item of <property> of <path>
+        // every item
         let everySpec = builder.buildEveryElement(code: itemCode, container: propSpec)
-        if testGetItemQuietly(spec: everySpec) {
+        if testGetItemQuietly(spec: everySpec, command: "get every item of \(listPath)") {
             supported.append("every item")
         } else {
             unsupported.append("every item")
         }
 
-        // Test: first item of <property> of <path>
+        // first item
         let firstSpec = buildOrdinalElement(code: itemCode, ordinal: AEConstants.kAEFirst, container: propSpec)
-        if testGetItemQuietly(spec: firstSpec) {
+        if testGetItemQuietly(spec: firstSpec, command: "get first item of \(listPath)") {
             supported.append("first item")
         } else {
             unsupported.append("first item")
         }
 
-        // Test: last item of <property> of <path>
+        // last item
         let lastSpec = buildOrdinalElement(code: itemCode, ordinal: AEConstants.kAELast, container: propSpec)
-        if testGetItemQuietly(spec: lastSpec) {
+        if testGetItemQuietly(spec: lastSpec, command: "get last item of \(listPath)") {
             supported.append("last item")
         } else {
             unsupported.append("last item")
         }
 
-        // Test: middle item of <property> of <path>
+        // middle item
         let middleSpec = builder.buildElementWithPredicate(
             code: itemCode, predicate: .byOrdinal(.middle), container: propSpec
         )
-        if testGetItemQuietly(spec: middleSpec) {
+        if testGetItemQuietly(spec: middleSpec, command: "get middle item of \(listPath)") {
             supported.append("middle item")
         } else {
             unsupported.append("middle item")
         }
 
-        // Test: some item of <property> of <path>
+        // some item
         let someSpec = builder.buildElementWithPredicate(
             code: itemCode, predicate: .byOrdinal(.some), container: propSpec
         )
-        if testGetItemQuietly(spec: someSpec) {
+        if testGetItemQuietly(spec: someSpec, command: "get some item of \(listPath)") {
             supported.append("some item")
         } else {
             unsupported.append("some item")
@@ -745,7 +808,7 @@ struct DynamicTester {
             ))
         }
 
-        // Test if list items contain object specifiers → test property access on items
+        // Test property access on list items that are object specifiers
         if let firstItem = listReply.atIndex(1),
            firstItem.descriptorType == AEConstants.typeObjectSpecifier {
             testPropertyOfListItem(
@@ -754,8 +817,6 @@ struct DynamicTester {
         }
     }
 
-    /// Test property access on an item of a list that contains object specifiers.
-    /// e.g. `name of item 1 of <property> of <path>`
     private func testPropertyOfListItem(
         itemSpec: NSAppleEventDescriptor,
         propName: String,
@@ -763,9 +824,10 @@ struct DynamicTester {
         findings: inout [LintFinding]
     ) {
         let nameOfItemSpec = builder.buildPropertySpecifier(code: "pnam", container: itemSpec)
+        let cmd = "get name of item 1 of \(propName) of \(path) of \(appRef)"
 
         do {
-            let result = try sender.sendGetEvent(to: appName, specifier: nameOfItemSpec, timeoutSeconds: 10)
+            let result = try sendGet(nameOfItemSpec, command: cmd)
             let nameStr = result.stringValue ?? "(non-string)"
             findings.append(LintFinding(
                 .info, category: "dynamic-list",
@@ -774,19 +836,18 @@ struct DynamicTester {
         } catch {
             findings.append(LintFinding(
                 .warning, category: "dynamic-list",
-                message: "Cannot get property of list item: name of item 1 of \(propName) of \(path): \(error.localizedDescription)"
+                message: "Cannot get property of list item: name of item 1 of \(propName) of \(path): \(error.localizedDescription)",
+                context: cmd
             ))
         }
     }
 
     // MARK: - Helpers
 
-    /// Try to get a specifier's value, return true on success.
-    private func testGetItemQuietly(spec: NSAppleEventDescriptor) -> Bool {
-        (try? sender.sendGetEvent(to: appName, specifier: spec, timeoutSeconds: 10)) != nil
+    private func testGetItemQuietly(spec: NSAppleEventDescriptor, command: String) -> Bool {
+        (try? sendGet(spec, command: command)) != nil
     }
 
-    /// Build an element specifier using an absolute ordinal (kAEFirst, kAELast, etc.)
     private func buildOrdinalElement(
         code: String,
         ordinal: FourCharCode,
@@ -813,8 +874,6 @@ struct DynamicTester {
         return specifier.coerce(toDescriptorType: AEConstants.typeObjectSpecifier)!
     }
 
-    /// Build an element specifier with a literal negative integer index
-    /// (not converted to kAELast ordinal like buildByIndex(-1) does).
     private func buildNegativeIndexElement(
         code: String,
         index: Int,
@@ -842,8 +901,6 @@ struct DynamicTester {
 
     // MARK: - Every element retrieval
 
-    /// Test that `get every <element>` works (not just counting).
-    /// Some apps support counting but not bulk retrieval.
     private func testEveryElementRetrieval() -> [LintFinding] {
         var findings: [LintFinding] = []
         guard let appClass = dictionary.findClass("application") else { return findings }
@@ -859,28 +916,26 @@ struct DynamicTester {
 
             let elementCode = FourCharCode(elemClass.code)
 
-            // Only test element types we know have instances
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: "count every \(elemClass.name) of \(appRef)"
                 )
             } catch {
                 continue
             }
             guard count > 0 else { continue }
 
-            // Test: get every <element>
             let everySpec = builder.buildEveryElement(
                 code: elemClass.code,
                 container: NSAppleEventDescriptor.null()
             )
+            let cmd = "get every \(elemClass.name) of \(appRef)"
 
             do {
-                let result = try sender.sendGetEvent(to: appName, specifier: everySpec, timeoutSeconds: 10)
+                let result = try sendGet(everySpec, command: cmd)
                 let resultCount: Int
                 if result.descriptorType == AEConstants.typeAEList {
                     resultCount = result.numberOfItems
@@ -891,14 +946,16 @@ struct DynamicTester {
                 if resultCount != count {
                     findings.append(LintFinding(
                         .warning, category: "dynamic-every",
-                        message: "every \(elemClass.name): count returned \(count) but get every returned \(resultCount) items"
+                        message: "every \(elemClass.name): count returned \(count) but get every returned \(resultCount) items",
+                        context: cmd
                     ))
                 }
             } catch {
                 failCount += 1
                 findings.append(LintFinding(
                     .warning, category: "dynamic-every",
-                    message: "Cannot get every \(elemClass.name): \(error.localizedDescription)"
+                    message: "Cannot get every \(elemClass.name): \(error.localizedDescription)",
+                    context: cmd
                 ))
             }
         }
@@ -913,7 +970,6 @@ struct DynamicTester {
 
     // MARK: - Whose clause testing
 
-    /// Test filter-based element access using whose clauses.
     private func testWhoseClause() -> [LintFinding] {
         var findings: [LintFinding] = []
         guard let appClass = dictionary.findClass("application") else { return findings }
@@ -927,25 +983,21 @@ struct DynamicTester {
 
             let elementCode = FourCharCode(elemClass.code)
 
-            // Only test element types with instances
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: "count every \(elemClass.name) of \(appRef)"
                 )
             } catch {
                 continue
             }
             guard count > 0 else { continue }
 
-            // Need the name property to build a whose clause
             let allProps = dictionary.allProperties(for: elemClass)
             guard allProps.contains(where: { $0.code == "pnam" }) else { continue }
 
-            // Get name of first element
             let firstSpec = builder.buildElementWithPredicate(
                 code: elemClass.code,
                 predicate: .byIndex(1),
@@ -953,12 +1005,11 @@ struct DynamicTester {
             )
             let nameSpec = builder.buildPropertySpecifier(code: "pnam", container: firstSpec)
 
-            guard let nameReply = try? sender.sendGetEvent(to: appName, specifier: nameSpec, timeoutSeconds: 10),
+            guard let nameReply = try? sendGet(nameSpec, command: "get name of \(elemClass.name) 1 of \(appRef)"),
                   let name = nameReply.stringValue, !name.isEmpty else {
                 continue
             }
 
-            // Test: <elements> whose name = "<name>"
             let testExpr = TestExpr(path: ["name"], op: .equal, value: .string(name))
             let whoseSpec = builder.buildElementWithPredicate(
                 code: elemClass.code,
@@ -966,11 +1017,11 @@ struct DynamicTester {
                 container: NSAppleEventDescriptor.null()
             )
 
-            // Try to get name of the whose result
+            let elemPlural = elemClass.pluralName ?? elemClass.name
             let whoseNameSpec = builder.buildPropertySpecifier(code: "pnam", container: whoseSpec)
+            let cmd = "get name of (every \(elemClass.name) whose name = \"\(name)\") of \(appRef)"
             do {
-                let result = try sender.sendGetEvent(to: appName, specifier: whoseNameSpec, timeoutSeconds: 10)
-                // Result may be a single value or a list
+                let result = try sendGet(whoseNameSpec, command: cmd)
                 let resultNames: [String]
                 if result.descriptorType == AEConstants.typeAEList {
                     resultNames = (1...result.numberOfItems).compactMap {
@@ -984,18 +1035,20 @@ struct DynamicTester {
                 if matched {
                     findings.append(LintFinding(
                         .info, category: "dynamic-whose",
-                        message: "\(elemClass.pluralName ?? elemClass.name) whose name = \"\(name)\": found \(resultNames.count) match(es)"
+                        message: "\(elemPlural) whose name = \"\(name)\": found \(resultNames.count) match(es)"
                     ))
                 } else {
                     findings.append(LintFinding(
                         .warning, category: "dynamic-whose",
-                        message: "\(elemClass.name) whose clause returned unexpected results for name = \"\(name)\""
+                        message: "\(elemClass.name) whose clause returned unexpected results for name = \"\(name)\"",
+                        context: cmd
                     ))
                 }
             } catch {
                 findings.append(LintFinding(
                     .warning, category: "dynamic-whose",
-                    message: "\(elemClass.name) whose clause not supported: \(error.localizedDescription)"
+                    message: "\(elemClass.name) whose clause not supported: \(error.localizedDescription)",
+                    context: cmd
                 ))
             }
         }
@@ -1005,7 +1058,6 @@ struct DynamicTester {
 
     // MARK: - Exists event testing
 
-    /// Test the 'exists' Apple Event (core/doex) on elements.
     private func testExistsEvent() -> [LintFinding] {
         var findings: [LintFinding] = []
         guard let appClass = dictionary.findClass("application") else { return findings }
@@ -1022,62 +1074,65 @@ struct DynamicTester {
             let elementCode = FourCharCode(elemClass.code)
             let count: Int
             do {
-                count = try sender.sendCountEvent(
-                    to: appName,
+                count = try sendCount(
                     container: NSAppleEventDescriptor.null(),
                     elementCode: elementCode,
-                    timeoutSeconds: 10
+                    command: "count every \(elemClass.name) of \(appRef)"
                 )
             } catch {
                 continue
             }
             guard count > 0 else { continue }
 
-            // Test: exists <first element> — should return true
+            // exists <first element> — should return true
             let firstSpec = builder.buildElementWithPredicate(
                 code: elemClass.code,
                 predicate: .byIndex(1),
                 container: NSAppleEventDescriptor.null()
             )
+            let existsCmd = "exists \(elemClass.name) 1 of \(appRef)"
 
             do {
-                let exists = try sender.sendExistsEvent(to: appName, specifier: firstSpec, timeoutSeconds: 10)
+                let exists = try sendExists(firstSpec, command: existsCmd)
                 if exists {
                     successCount += 1
                 } else {
                     failCount += 1
                     findings.append(LintFinding(
                         .warning, category: "dynamic-exists",
-                        message: "exists \(elemClass.name) 1 returned false (expected true, count = \(count))"
+                        message: "exists \(elemClass.name) 1 returned false (expected true, count = \(count))",
+                        context: existsCmd
                     ))
                 }
             } catch {
                 failCount += 1
                 findings.append(LintFinding(
                     .warning, category: "dynamic-exists",
-                    message: "exists \(elemClass.name) 1 failed: \(error.localizedDescription)"
+                    message: "exists \(elemClass.name) 1 failed: \(error.localizedDescription)",
+                    context: existsCmd
                 ))
             }
 
-            // Test: exists <element by impossible name> — should return false
+            // exists <element by impossible name> — should return false
+            let bogusName = "__aelint_nonexistent_\(UUID().uuidString)__"
             let bogusSpec = builder.buildElementWithPredicate(
                 code: elemClass.code,
-                predicate: .byName("__aelint_nonexistent_\(UUID().uuidString)__"),
+                predicate: .byName(bogusName),
                 container: NSAppleEventDescriptor.null()
             )
+            let bogusCmd = "exists \(elemClass.name) \"\(bogusName)\" of \(appRef)"
 
             do {
-                let exists = try sender.sendExistsEvent(to: appName, specifier: bogusSpec, timeoutSeconds: 10)
-                if !exists {
-                    // Correct: nonexistent element reports false
-                } else {
+                let exists = try sendExists(bogusSpec, command: bogusCmd)
+                if exists {
                     findings.append(LintFinding(
                         .warning, category: "dynamic-exists",
-                        message: "exists \(elemClass.name) with bogus name returned true (expected false)"
+                        message: "exists \(elemClass.name) with bogus name returned true (expected false)",
+                        context: bogusCmd
                     ))
                 }
             } catch {
-                // Some apps throw an error instead of returning false for nonexistent — that's acceptable
+                // Some apps throw instead of returning false — acceptable
             }
         }
 
@@ -1091,7 +1146,6 @@ struct DynamicTester {
 
     // MARK: - Type validation
 
-    /// Check that property return types match their SDEF-declared types.
     private func testTypeValidation() -> [LintFinding] {
         var findings: [LintFinding] = []
         guard let appClass = dictionary.findClass("application") else { return findings }
@@ -1113,12 +1167,13 @@ struct DynamicTester {
                 code: prop.code,
                 container: NSAppleEventDescriptor.null()
             )
+            let cmd = "get \(prop.name) of \(appRef)"
 
             let reply: NSAppleEventDescriptor
             do {
-                reply = try sender.sendGetEvent(to: appName, specifier: propSpec, timeoutSeconds: 10)
+                reply = try sendGet(propSpec, command: cmd)
             } catch {
-                continue  // read failures already reported
+                continue
             }
 
             let actualType = reply.descriptorType
@@ -1129,7 +1184,8 @@ struct DynamicTester {
                 let actualStr = descTypeString(actualType)
                 findings.append(LintFinding(
                     .info, category: "dynamic-type",
-                    message: "Property '\(prop.name)' declared as '\(declaredType)' but returned descriptor type '\(actualStr)'"
+                    message: "Property '\(prop.name)' declared as '\(declaredType)' but returned descriptor type '\(actualStr)'",
+                    context: cmd
                 ))
             }
         }
@@ -1144,7 +1200,6 @@ struct DynamicTester {
         return findings
     }
 
-    /// Check whether a returned descriptor type is compatible with the SDEF-declared type.
     private func isTypeCompatible(declaredType: String, actualDescType: DescType) -> Bool {
         let lower = declaredType.lowercased()
         let actual = FourCharCode(actualDescType)
@@ -1180,21 +1235,18 @@ struct DynamicTester {
         case "specifier", "reference", "location specifier":
             return actualStr == "obj "
         case "any", "missing value":
-            return true  // any type is acceptable
+            return true
         default:
-            // Check if declared type is a class name → expect object specifier
             if dictionary.findClass(declaredType) != nil {
                 return actualStr == "obj "
             }
-            // Check if declared type is an enumeration → expect typeEnumerated
             if dictionary.findEnumeration(declaredType) != nil {
                 return actualStr == "enum"
             }
-            return true  // unknown types pass by default
+            return true
         }
     }
 
-    /// Convert a DescType to a 4-character string for display.
     private func descTypeString(_ dt: DescType) -> String {
         FourCharCode(dt).stringValue
     }

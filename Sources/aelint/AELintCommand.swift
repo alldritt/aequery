@@ -22,6 +22,9 @@ struct AELintCommand: ParsableCommand {
     @Flag(name: .long, help: "Output report as JSON")
     var json: Bool = false
 
+    @Flag(name: .long, help: "Log each Apple Event sent and its result to stderr")
+    var log: Bool = false
+
     @Option(name: .long, help: "Maximum containment depth for path enumeration (default 6)")
     var maxDepth: Int = 6
 
@@ -47,7 +50,7 @@ struct AELintCommand: ParsableCommand {
 
         // Dynamic tests
         if dynamic {
-            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth)
+            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log)
             findings.append(contentsOf: tester.runTests(pathFinder: pathFinder))
         }
 
