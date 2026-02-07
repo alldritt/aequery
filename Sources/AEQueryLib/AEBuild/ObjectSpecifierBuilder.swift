@@ -9,14 +9,8 @@ public struct ObjectSpecifierBuilder {
 
     /// Build a complete object specifier chain from resolved steps.
     /// The chain is built innermost-first: application → first step → ... → last step.
-    /// When there are no steps, returns a specifier for all properties of the application.
     public func buildSpecifier(from resolvedQuery: ResolvedQuery) -> NSAppleEventDescriptor {
         var container = NSAppleEventDescriptor.null()
-
-        if resolvedQuery.steps.isEmpty {
-            // No steps: get all properties of the application
-            return buildPropertySpecifier(code: AEConstants.pAll.stringValue, container: container)
-        }
 
         for step in resolvedQuery.steps {
             container = buildStep(step, container: container)
@@ -129,10 +123,10 @@ public struct ObjectSpecifierBuilder {
         )
 
         if index == -1 {
-            specifier.setDescriptor(
-                NSAppleEventDescriptor(enumCode: AEConstants.kAELast),
-                forKeyword: AEConstants.keyAEKeyData
-            )
+            var lastCode = AEConstants.kAELast
+            let lastData = Data(bytes: &lastCode, count: 4)
+            let lastDesc = NSAppleEventDescriptor(descriptorType: AEConstants.typeAbsoluteOrdinal, data: lastData)!
+            specifier.setDescriptor(lastDesc, forKeyword: AEConstants.keyAEKeyData)
         } else {
             specifier.setDescriptor(
                 NSAppleEventDescriptor(int32: Int32(index)),

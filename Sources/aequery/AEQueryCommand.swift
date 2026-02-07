@@ -137,6 +137,11 @@ struct AEQueryCommand: ParsableCommand {
             return
         }
 
+        if resolved.steps.isEmpty {
+            FileHandle.standardError.write("Error: No property or element path specified. Use e.g. '/\(query.appName)/properties' or '/\(query.appName)/windows'.\n")
+            throw ExitCode.failure
+        }
+
         // 5. Build specifier
         let builder = ObjectSpecifierBuilder(dictionary: dictionary)
         let specifier = builder.buildSpecifier(from: resolved)

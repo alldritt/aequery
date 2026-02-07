@@ -202,9 +202,8 @@ public struct SDEFLoader {
 
     private func resolveAppPath(_ appName: String) throws -> String {
         // Check if the app is currently running and use that bundle path
-        let runningApps = NSWorkspace.shared.runningApplications
-        if let running = runningApps.first(where: { $0.localizedName == appName }),
-           let bundleURL = running.bundleURL {
+        let running = findRunningApp(named: appName)
+        if let running = running, let bundleURL = running.bundleURL {
             return bundleURL.path
         }
 

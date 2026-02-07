@@ -120,6 +120,17 @@ public struct SDEFResolver {
             )
         }
 
+        // "properties" → pALL (get all properties of the object)
+        if name == "properties" {
+            return ResolvedStep(
+                name: step.name,
+                kind: .property,
+                code: "pALL",
+                predicates: step.predicates,
+                className: nil
+            )
+        }
+
         // Nothing found
         let availableElements = allElems.compactMap { dictionary.findClass($0.type)?.name }
         let availableProperties = allProps.map(\.name)

@@ -113,7 +113,19 @@ public struct DescriptorDecoder {
             var pairs: [(String, AEValue)] = []
             for i in 1...max(1, descriptor.numberOfItems) {
                 let keyword = descriptor.keywordForDescriptor(at: i)
-                if let item = descriptor.atIndex(i) {
+                if keyword == keyASUserRecordFields, let item = descriptor.atIndex(i) {
+                    // usrf: list of alternating [name, value, name, value, ...]
+                    let count = item.numberOfItems
+                    var j = 1
+                    while j + 1 <= count {
+                        if let nameDesc = item.atIndex(j),
+                           let valDesc = item.atIndex(j + 1),
+                           let name = nameDesc.stringValue {
+                            pairs.append((name, decode(valDesc)))
+                        }
+                        j += 2
+                    }
+                } else if let item = descriptor.atIndex(i) {
                     let key = FourCharCode(keyword).stringValue
                     pairs.append((key, decode(item)))
                 }
@@ -134,6 +146,14 @@ public struct DescriptorDecoder {
             let seld = seldDesc.map { decode($0) } ?? .null
             let from = fromDesc.map { decode($0) } ?? .null
             return .objectSpecifier(want: want, form: form, seld: seld, from: from)
+
+        // File URL
+        case typeFileURL:
+            if let urlString = String(data: descriptor.data, encoding: .utf8),
+               let url = URL(string: urlString) {
+                return .string(url.path)
+            }
+            return .string(descriptor.stringValue ?? "")
 
         // Type/Enum
         case typeType, typeEnumerated:
@@ -173,6 +193,8 @@ private let typeAERecord: UInt32 = 0x7265636F   // 'reco'
 private let typeType: UInt32 = 0x74797065       // 'type'
 private let typeEnumerated: UInt32 = 0x656E756D // 'enum'
 private let typeObjectSpecifier: UInt32 = 0x6F626A20 // 'obj '
+private let typeFileURL: UInt32 = 0x6675726C         // 'furl'
+private let keyASUserRecordFields: UInt32 = 0x75737266 // 'usrf'
 
 extension AEValue {
     public func flattened() -> AEValue {

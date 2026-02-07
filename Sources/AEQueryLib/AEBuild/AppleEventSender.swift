@@ -73,8 +73,8 @@ public struct AppleEventSender {
 
     /// Resolve app name to a target descriptor, preferring process ID for running apps.
     private func resolveTargetDescriptor(_ appName: String) throws -> NSAppleEventDescriptor {
-        // First check running applications by localized name
-        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) {
+        // First check running applications by name
+        if let running = findRunningApp(named: appName) {
             return NSAppleEventDescriptor(processIdentifier: running.processIdentifier)
         }
 
@@ -92,7 +92,7 @@ public struct AppleEventSender {
 
     private func resolveBundleIdentifier(_ appName: String) throws -> String {
         // Check running applications first
-        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }),
+        if let running = findRunningApp(named: appName),
            let bundleID = running.bundleIdentifier {
             return bundleID
         }
