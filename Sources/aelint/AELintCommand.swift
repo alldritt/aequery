@@ -98,6 +98,71 @@ struct AELintCommand: ParsableCommand {
         if findings.isEmpty {
             print("No issues found.")
         }
+
+        // Dynamic test summary
+        if dynamic {
+            printDynamicSummary(findings)
+        }
+    }
+
+    private func printDynamicSummary(_ findings: [LintFinding]) {
+        let dynamicFindings = findings.filter { $0.category.hasPrefix("dynamic") }
+        guard !dynamicFindings.isEmpty else { return }
+
+        print(String(repeating: "=", count: 40))
+        print("Dynamic Test Summary")
+        print(String(repeating: "-", count: 40))
+
+        // Collect categories and their summary findings
+        let categories: [(prefix: String, label: String)] = [
+            ("dynamic-property", "Application properties"),
+            ("dynamic-count", "Element counting"),
+            ("dynamic-element-prop", "Element properties"),
+            ("dynamic-access", "Access forms"),
+            ("dynamic-explore", "Sub-element exploration"),
+            ("dynamic-every", "Every-element retrieval"),
+            ("dynamic-whose", "Whose clause (equals)"),
+            ("dynamic-whose-ops", "Whose clause operators"),
+            ("dynamic-exists", "Exists event"),
+            ("dynamic-type", "Type validation"),
+            ("dynamic-range", "Range access"),
+            ("dynamic-inherit", "Inherited properties"),
+            ("dynamic-error", "Error handling"),
+            ("dynamic-set", "Set property"),
+            ("dynamic-pall", "Properties record"),
+        ]
+
+        for (prefix, label) in categories {
+            let catFindings = dynamicFindings.filter { $0.category == prefix }
+            guard !catFindings.isEmpty else { continue }
+
+            let hasWarnings = catFindings.contains { $0.severity == .warning }
+            let hasErrors = catFindings.contains { $0.severity == .error }
+            let symbol = hasErrors ? "X" : (hasWarnings ? "!" : ".")
+            // Find the summary finding (usually last info in the category)
+            if let summary = catFindings.last(where: { $0.severity == .info }) {
+                // Strip redundant label prefix from message (e.g. "Set property: 23 writable..." → "23 writable...")
+                let msg = stripLabelPrefix(summary.message, label: label)
+                print("  \(symbol) \(label): \(msg)")
+            } else if let first = catFindings.first {
+                print("  \(symbol) \(label): \(first.message)")
+            }
+        }
+        print()
+    }
+
+    private func stripLabelPrefix(_ message: String, label: String) -> String {
+        // Try stripping "Label: " prefix from messages like "Set property: 23 writable..."
+        let prefixes = [
+            "\(label): ",
+            "\(label.lowercased()): ",
+        ]
+        for prefix in prefixes {
+            if message.hasPrefix(prefix) {
+                return String(message.dropFirst(prefix.count))
+            }
+        }
+        return message
     }
 
     private func printJSONReport(_ findings: [LintFinding]) {

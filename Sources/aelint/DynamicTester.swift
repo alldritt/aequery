@@ -180,6 +180,12 @@ struct DynamicTester {
         // Test 13: Set property (read-write)
         findings.append(contentsOf: testSetProperty())
 
+        // Test 14: Properties record (pALL)
+        findings.append(contentsOf: testPropertiesRecord())
+
+        // Test 15: Whose clause operators (contains, begins with, ends with)
+        findings.append(contentsOf: testWhoseOperators())
+
         return findings
     }
 
@@ -1666,5 +1672,247 @@ struct DynamicTester {
                 ))
             }
         }
+    }
+
+    // MARK: - Properties record (pALL)
+
+    private func testPropertiesRecord() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        // Test get properties of application
+        let appPropSpec = builder.buildPropertySpecifier(
+            code: "pALL",
+            container: NSAppleEventDescriptor.null()
+        )
+        let appCmd = "get properties of \(appRef)"
+        var appRecordKeys = 0
+
+        do {
+            let result = try sendGet(appPropSpec, command: appCmd)
+            if result.descriptorType == typeType(for: "reco") {
+                appRecordKeys = result.numberOfItems
+                findings.append(LintFinding(
+                    .info, category: "dynamic-pall",
+                    message: "properties of application: record with \(appRecordKeys) keys"
+                ))
+            } else {
+                findings.append(LintFinding(
+                    .info, category: "dynamic-pall",
+                    message: "properties of application: returned \(descTypeString(result.descriptorType)) (expected record)"
+                ))
+            }
+        } catch {
+            findings.append(LintFinding(
+                .warning, category: "dynamic-pall",
+                message: "Cannot get properties of application: \(error.localizedDescription)",
+                context: appCmd
+            ))
+        }
+
+        // Test get properties of first element of each type
+        let allElems = dictionary.allElements(for: appClass)
+        var elemSuccess = 0
+        var elemFail = 0
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+            let propSpec = builder.buildPropertySpecifier(code: "pALL", container: firstSpec)
+            let cmd = "get properties of \(elemClass.name) 1 of \(appRef)"
+
+            do {
+                let result = try sendGet(propSpec, command: cmd)
+                elemSuccess += 1
+                if result.descriptorType == typeType(for: "reco") {
+                    let keys = result.numberOfItems
+                    let expected = dictionary.allProperties(for: elemClass).filter { !$0.hidden }.count
+                    if keys < expected / 2 {
+                        findings.append(LintFinding(
+                            .info, category: "dynamic-pall",
+                            message: "\(elemClass.name) properties record has \(keys) keys but SDEF declares \(expected) properties"
+                        ))
+                    }
+                }
+            } catch {
+                elemFail += 1
+            }
+        }
+
+        if elemSuccess > 0 || elemFail > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-pall",
+                message: "Properties record: application + \(elemSuccess) element types succeeded, \(elemFail) failed"
+            ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Whose clause operators
+
+    private func testWhoseOperators() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            let allProps = dictionary.allProperties(for: elemClass)
+            guard allProps.contains(where: { $0.code == "pnam" }) else { continue }
+
+            // Get the name of the first element to use as test data
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+            let nameSpec = builder.buildPropertySpecifier(code: "pnam", container: firstSpec)
+            guard let nameReply = try? sendGet(nameSpec, command: "get name of \(elemClass.name) 1 of \(appRef)"),
+                  let name = nameReply.stringValue, name.count >= 2 else {
+                continue
+            }
+
+            let elemPlural = elemClass.pluralName ?? elemClass.name
+            var supported: [String] = []
+            var unsupported: [String] = []
+
+            // Test "contains" — use a substring of the name
+            let substring = String(name.prefix(max(1, name.count / 2)))
+            let containsTest = TestExpr(path: ["name"], op: .contains, value: .string(substring))
+            let containsSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .test(containsTest),
+                container: NSAppleEventDescriptor.null()
+            )
+            let containsNameSpec = builder.buildPropertySpecifier(code: "pnam", container: containsSpec)
+            let containsCmd = "get name of (every \(elemClass.name) whose name contains \"\(substring)\") of \(appRef)"
+
+            do {
+                let result = try sendGet(containsNameSpec, command: containsCmd)
+                let names: [String]
+                if result.descriptorType == AEConstants.typeAEList {
+                    names = (1...result.numberOfItems).compactMap { result.atIndex($0)?.stringValue }
+                } else {
+                    names = [result.stringValue].compactMap { $0 }
+                }
+                if names.contains(where: { $0.localizedCaseInsensitiveContains(substring) }) {
+                    supported.append("contains")
+                } else {
+                    unsupported.append("contains")
+                }
+            } catch {
+                unsupported.append("contains")
+            }
+
+            // Test "begins with" — use the first few characters
+            let prefix = String(name.prefix(max(1, name.count / 3)))
+            let beginsTest = TestExpr(path: ["name"], op: .beginsWith, value: .string(prefix))
+            let beginsSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .test(beginsTest),
+                container: NSAppleEventDescriptor.null()
+            )
+            let beginsNameSpec = builder.buildPropertySpecifier(code: "pnam", container: beginsSpec)
+            let beginsCmd = "get name of (every \(elemClass.name) whose name begins with \"\(prefix)\") of \(appRef)"
+
+            do {
+                let result = try sendGet(beginsNameSpec, command: beginsCmd)
+                let names: [String]
+                if result.descriptorType == AEConstants.typeAEList {
+                    names = (1...result.numberOfItems).compactMap { result.atIndex($0)?.stringValue }
+                } else {
+                    names = [result.stringValue].compactMap { $0 }
+                }
+                if names.contains(where: { $0.localizedCaseInsensitiveCompare(prefix) == .orderedSame ||
+                    $0.lowercased().hasPrefix(prefix.lowercased()) }) {
+                    supported.append("begins with")
+                } else {
+                    unsupported.append("begins with")
+                }
+            } catch {
+                unsupported.append("begins with")
+            }
+
+            // Test "ends with" — use the last few characters
+            let suffix = String(name.suffix(max(1, name.count / 3)))
+            let endsTest = TestExpr(path: ["name"], op: .endsWith, value: .string(suffix))
+            let endsSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .test(endsTest),
+                container: NSAppleEventDescriptor.null()
+            )
+            let endsNameSpec = builder.buildPropertySpecifier(code: "pnam", container: endsSpec)
+            let endsCmd = "get name of (every \(elemClass.name) whose name ends with \"\(suffix)\") of \(appRef)"
+
+            do {
+                let result = try sendGet(endsNameSpec, command: endsCmd)
+                let names: [String]
+                if result.descriptorType == AEConstants.typeAEList {
+                    names = (1...result.numberOfItems).compactMap { result.atIndex($0)?.stringValue }
+                } else {
+                    names = [result.stringValue].compactMap { $0 }
+                }
+                if names.contains(where: { $0.lowercased().hasSuffix(suffix.lowercased()) }) {
+                    supported.append("ends with")
+                } else {
+                    unsupported.append("ends with")
+                }
+            } catch {
+                unsupported.append("ends with")
+            }
+
+            if !supported.isEmpty || !unsupported.isEmpty {
+                findings.append(LintFinding(
+                    .info, category: "dynamic-whose-ops",
+                    message: "\(elemPlural) whose operators: \(supported.isEmpty ? "none" : supported.joined(separator: ", "))"
+                ))
+                if !unsupported.isEmpty {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-whose-ops",
+                        message: "\(elemPlural) unsupported whose operators: \(unsupported.joined(separator: ", "))"
+                    ))
+                }
+            }
+        }
+
+        return findings
     }
 }

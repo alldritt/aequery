@@ -69,6 +69,7 @@ struct SDEFValidator {
         findings.append(contentsOf: checkCommandValidation())
         findings.append(contentsOf: checkStandardSuiteCompliance())
         findings.append(contentsOf: checkDocumentationQuality())
+        findings.append(contentsOf: checkCodeValidity())
 
         return findings
     }
@@ -526,6 +527,42 @@ struct SDEFValidator {
                 .info, category: "documentation",
                 message: "\(commandsWithoutDesc) of \(commandsTotal) commands (\(pct)%) have no description"
             ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Code validity
+
+    /// Check that 4CC codes have exactly 4 bytes and command codes have 8.
+    private func checkCodeValidity() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        for cls in dictionary.classes.values {
+            if let data = cls.code.data(using: .macOSRoman), data.count != 4 {
+                findings.append(LintFinding(
+                    .error, category: "invalid-code",
+                    message: "Class '\(cls.name)' has invalid code '\(cls.code)' (\(data.count) bytes, expected 4)"
+                ))
+            }
+            for prop in cls.properties {
+                if let data = prop.code.data(using: .macOSRoman), data.count != 4 {
+                    findings.append(LintFinding(
+                        .error, category: "invalid-code",
+                        message: "Property '\(prop.name)' in class '\(cls.name)' has invalid code '\(prop.code)' (\(data.count) bytes, expected 4)"
+                    ))
+                }
+            }
+        }
+
+        for cmd in dictionary.commands.values {
+            if cmd.hidden { continue }
+            if let data = cmd.code.data(using: .macOSRoman), data.count != 8 {
+                findings.append(LintFinding(
+                    .error, category: "invalid-code",
+                    message: "Command '\(cmd.name)' has invalid event code '\(cmd.code)' (\(data.count) bytes, expected 8)"
+                ))
+            }
         }
 
         return findings
