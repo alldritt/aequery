@@ -169,12 +169,30 @@ public struct DescriptorDecoder {
             let val = descriptor.typeCodeValue
             return .string(FourCharCode(val).stringValue)
 
+        // QuickDraw Point (v, h as SInt16)
+        case typeQDPoint:
+            let data = descriptor.data
+            if data.count >= MemoryLayout<QDPoint>.size {
+                let pt = data.withUnsafeBytes { $0.load(as: QDPoint.self) }
+                return .list([.integer(Int(pt.h)), .integer(Int(pt.v))])
+            }
+            return .list([])
+
+        // QuickDraw Rectangle (top, left, bottom, right as SInt16)
+        case typeQDRectangle:
+            let data = descriptor.data
+            if data.count >= MemoryLayout<QDRect>.size {
+                let r = data.withUnsafeBytes { $0.load(as: QDRect.self) }
+                return .list([.integer(Int(r.left)), .integer(Int(r.top)), .integer(Int(r.right)), .integer(Int(r.bottom))])
+            }
+            return .list([])
+
         default:
             // Try coercing to string as a fallback
             if let str = descriptor.stringValue {
                 return .string(str)
             }
-            // Return the type code as a string for debugging
+            // Last resort: type code for debugging
             let typeStr = FourCharCode(typeCode).stringValue
             return .string("[\(typeStr)]")
         }
@@ -204,6 +222,12 @@ private let typeEnumerated: UInt32 = 0x656E756D // 'enum'
 private let typeObjectSpecifier: UInt32 = 0x6F626A20 // 'obj '
 private let typeAbsoluteOrdinal: UInt32 = 0x6162736F // 'abso'
 private let typeFileURL: UInt32 = 0x6675726C         // 'furl'
+private let typeQDPoint: UInt32 = 0x51447074         // 'QDpt'
+private let typeQDRectangle: UInt32 = 0x71647274     // 'qdrt'
+
+// QuickDraw struct layouts for loading from descriptor data
+private struct QDPoint { var v: Int16; var h: Int16 }
+private struct QDRect { var top: Int16; var left: Int16; var bottom: Int16; var right: Int16 }
 private let keyASUserRecordFields: UInt32 = 0x75737266 // 'usrf'
 
 extension AEValue {
