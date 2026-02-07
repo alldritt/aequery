@@ -92,6 +92,11 @@ public struct SDEFParser {
     }
 
     private func parseSuite(_ suite: XMLElement, into dictionary: inout ScriptingDictionary) throws {
+        let suiteName = suite.attribute(forName: "name")?.stringValue
+        if let suiteName = suiteName {
+            dictionary.suiteNames.append(suiteName)
+        }
+
         // Parse classes
         for node in try suite.nodes(forXPath: "class") {
             guard let element = node as? XMLElement else { continue }
@@ -114,6 +119,13 @@ public struct SDEFParser {
             let enumDef = parseEnumeration(element)
             dictionary.enumerations[enumDef.name.lowercased()] = enumDef
         }
+
+        // Parse commands
+        for node in try suite.nodes(forXPath: "command") {
+            guard let element = node as? XMLElement else { continue }
+            let commandDef = parseCommand(element, suiteName: suiteName)
+            dictionary.commands[commandDef.name.lowercased()] = commandDef
+        }
     }
 
     private func parseClass(_ element: XMLElement) throws -> ClassDef {
@@ -124,6 +136,7 @@ public struct SDEFParser {
         let plural = element.attribute(forName: "plural")?.stringValue
         let inherits = element.attribute(forName: "inherits")?.stringValue
         let hidden = element.attribute(forName: "hidden")?.stringValue == "yes"
+        let description = element.attribute(forName: "description")?.stringValue
         let properties = parseProperties(element)
         let elements = parseElements(element)
 
@@ -133,6 +146,7 @@ public struct SDEFParser {
             pluralName: plural,
             inherits: inherits,
             hidden: hidden,
+            description: description,
             properties: properties,
             elements: elements
         )
@@ -148,7 +162,8 @@ public struct SDEFParser {
             let accessStr = propElement.attribute(forName: "access")?.stringValue
             let access = accessStr.flatMap { PropertyAccess(rawValue: $0) }
             let hidden = propElement.attribute(forName: "hidden")?.stringValue == "yes"
-            props.append(PropertyDef(name: name, code: code, type: type, access: access, hidden: hidden))
+            let description = propElement.attribute(forName: "description")?.stringValue
+            props.append(PropertyDef(name: name, code: code, type: type, access: access, hidden: hidden, description: description))
         }
         return props
     }
@@ -176,6 +191,53 @@ public struct SDEFParser {
             enumerators.append(Enumerator(name: eName, code: eCode))
         }
         return EnumDef(name: name, code: code, enumerators: enumerators)
+    }
+
+    private func parseCommand(_ element: XMLElement, suiteName: String?) -> CommandDef {
+        let name = element.attribute(forName: "name")?.stringValue ?? ""
+        let code = element.attribute(forName: "code")?.stringValue ?? ""
+        let description = element.attribute(forName: "description")?.stringValue
+        let hidden = element.attribute(forName: "hidden")?.stringValue == "yes"
+
+        // Parse direct-parameter
+        var directParam: CommandParam? = nil
+        if let dpNode = (try? element.nodes(forXPath: "direct-parameter"))?.first as? XMLElement {
+            let dpType = dpNode.attribute(forName: "type")?.stringValue
+            let dpOptional = dpNode.attribute(forName: "optional")?.stringValue == "yes"
+            let dpDesc = dpNode.attribute(forName: "description")?.stringValue
+            directParam = CommandParam(type: dpType, optional: dpOptional, description: dpDesc)
+        }
+
+        // Parse parameters
+        var params: [CommandParam] = []
+        for node in (try? element.nodes(forXPath: "parameter")) ?? [] {
+            guard let paramElement = node as? XMLElement else { continue }
+            let pName = paramElement.attribute(forName: "name")?.stringValue
+            let pCode = paramElement.attribute(forName: "code")?.stringValue
+            let pType = paramElement.attribute(forName: "type")?.stringValue
+            let pOptional = paramElement.attribute(forName: "optional")?.stringValue == "yes"
+            let pDesc = paramElement.attribute(forName: "description")?.stringValue
+            params.append(CommandParam(name: pName, code: pCode, type: pType, optional: pOptional, description: pDesc))
+        }
+
+        // Parse result
+        var result: CommandResult? = nil
+        if let resNode = (try? element.nodes(forXPath: "result"))?.first as? XMLElement {
+            let resType = resNode.attribute(forName: "type")?.stringValue
+            let resDesc = resNode.attribute(forName: "description")?.stringValue
+            result = CommandResult(type: resType, description: resDesc)
+        }
+
+        return CommandDef(
+            name: name,
+            code: code,
+            description: description,
+            hidden: hidden,
+            directParameter: directParam,
+            parameters: params,
+            result: result,
+            suiteName: suiteName
+        )
     }
 }
 

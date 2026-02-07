@@ -70,10 +70,11 @@ struct AELintCommand: ParsableCommand {
         let info = findings.filter { $0.severity == .info }
 
         let enumCount = dictionary.enumerations.count
+        let cmdCount = dictionary.commands.count
 
         print("aelint report for \(appName)")
         print(String(repeating: "=", count: 40))
-        print("Classes: \(dictionary.classes.count), Enumerations: \(enumCount)")
+        print("Classes: \(dictionary.classes.count), Commands: \(cmdCount), Enumerations: \(enumCount)")
         print("Findings: \(errors.count) errors, \(warnings.count) warnings, \(info.count) info")
         print()
 

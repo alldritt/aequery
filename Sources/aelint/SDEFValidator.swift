@@ -34,6 +34,26 @@ struct SDEFValidator {
         "where", "while", "whose", "with", "without",
     ]
 
+    // Standard Suite expected commands
+    private static let standardSuiteCommands: [String: String] = [
+        "open": "aevtodoc",
+        "quit": "aevtquit",
+        "count": "corecnte",
+        "exists": "coredoex",
+        "make": "corecrel",
+        "get": "coregetd",
+        "set": "coresetd",
+        "close": "coreclos",
+        "delete": "coredelo",
+    ]
+
+    // Expected application class properties
+    private static let expectedAppProperties: [String: String] = [
+        "name": "pnam",
+        "frontmost": "pisf",
+        "version": "vers",
+    ]
+
     func validate() -> [LintFinding] {
         var findings: [LintFinding] = []
 
@@ -46,6 +66,9 @@ struct SDEFValidator {
         findings.append(contentsOf: checkNonStandardWellKnownTerms())
         findings.append(contentsOf: checkUnusedEnumerations())
         findings.append(contentsOf: checkReservedWordTerms())
+        findings.append(contentsOf: checkCommandValidation())
+        findings.append(contentsOf: checkStandardSuiteCompliance())
+        findings.append(contentsOf: checkDocumentationQuality())
 
         return findings
     }
@@ -274,7 +297,7 @@ struct SDEFValidator {
     private func checkUnusedEnumerations() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Collect all types referenced by properties
+        // Collect all types referenced by properties and command parameters
         var referencedTypes = Set<String>()
         for cls in dictionary.classes.values {
             for prop in cls.properties {
@@ -283,12 +306,25 @@ struct SDEFValidator {
                 }
             }
         }
+        for cmd in dictionary.commands.values {
+            if let type = cmd.directParameter?.type {
+                referencedTypes.insert(type.lowercased())
+            }
+            for param in cmd.parameters {
+                if let type = param.type {
+                    referencedTypes.insert(type.lowercased())
+                }
+            }
+            if let type = cmd.result?.type {
+                referencedTypes.insert(type.lowercased())
+            }
+        }
 
         for enumDef in dictionary.enumerations.values {
             if !referencedTypes.contains(enumDef.name.lowercased()) {
                 findings.append(LintFinding(
                     .info, category: "unused-enum",
-                    message: "Enumeration '\(enumDef.name)' is not referenced by any property"
+                    message: "Enumeration '\(enumDef.name)' is not referenced by any property or command"
                 ))
             }
         }
@@ -317,6 +353,176 @@ struct SDEFValidator {
                     ))
                 }
             }
+        }
+
+        return findings
+    }
+
+    // MARK: - Command validation
+
+    private func checkCommandValidation() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        // Built-in types that are valid for command parameters
+        let builtinTypes: Set<String> = [
+            "text", "integer", "real", "number", "boolean", "date",
+            "file", "point", "rectangle", "color", "rgb color",
+            "alias", "any", "specifier", "location specifier",
+            "record", "list", "type", "missing value", "data",
+            "property", "reference", "handler",
+        ]
+
+        // Check for duplicate command codes
+        var commandCodes: [String: [String]] = [:]  // code → [command names]
+        for cmd in dictionary.commands.values {
+            if cmd.hidden { continue }
+            commandCodes[cmd.code, default: []].append(cmd.name)
+        }
+        for (code, names) in commandCodes where names.count > 1 {
+            findings.append(LintFinding(
+                .warning, category: "duplicate-command-code",
+                message: "Command code '\(code)' used by multiple commands: \(names.joined(separator: ", "))"
+            ))
+        }
+
+        // Check command parameter codes for duplicates within a command
+        for cmd in dictionary.commands.values {
+            if cmd.hidden { continue }
+            var paramCodes: [String: [String]] = [:]
+            for param in cmd.parameters {
+                if let code = param.code {
+                    paramCodes[code, default: []].append(param.name ?? "(unnamed)")
+                }
+            }
+            for (code, names) in paramCodes where names.count > 1 {
+                findings.append(LintFinding(
+                    .error, category: "duplicate-param-code",
+                    message: "Parameter code '\(code)' used multiple times in command '\(cmd.name)': \(names.joined(separator: ", "))"
+                ))
+            }
+
+            // Check for undefined parameter types
+            let allParamTypes = cmd.parameters.compactMap(\.type) +
+                [cmd.directParameter?.type, cmd.result?.type].compactMap { $0 }
+            for type in allParamTypes {
+                let lower = type.lowercased()
+                if builtinTypes.contains(lower) { continue }
+                if dictionary.findClass(type) != nil { continue }
+                if dictionary.findEnumeration(type) != nil { continue }
+                findings.append(LintFinding(
+                    .info, category: "undefined-command-type",
+                    message: "Command '\(cmd.name)' references type '\(type)' which is not defined in the SDEF",
+                    context: "May be a system-defined type"
+                ))
+            }
+        }
+
+        return findings
+    }
+
+    // MARK: - Standard Suite compliance
+
+    private func checkStandardSuiteCompliance() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        // Check for application class
+        guard let appClass = dictionary.findClass("application") else {
+            findings.append(LintFinding(
+                .error, category: "standard-suite",
+                message: "No 'application' class defined"
+            ))
+            return findings
+        }
+
+        // Check expected application properties
+        let allProps = dictionary.allProperties(for: appClass)
+        for (propName, expectedCode) in Self.expectedAppProperties {
+            if let prop = allProps.first(where: { $0.name.lowercased() == propName }) {
+                if prop.code != expectedCode {
+                    findings.append(LintFinding(
+                        .warning, category: "standard-suite",
+                        message: "Application property '\(propName)' has code '\(prop.code)' instead of expected '\(expectedCode)'"
+                    ))
+                }
+            } else {
+                findings.append(LintFinding(
+                    .info, category: "standard-suite",
+                    message: "Application class is missing standard property '\(propName)' (\(expectedCode))"
+                ))
+            }
+        }
+
+        // Check expected application elements (window, document)
+        let allElems = dictionary.allElements(for: appClass)
+        let elemTypes = Set(allElems.map { $0.type.lowercased() })
+        if !elemTypes.contains("window") {
+            findings.append(LintFinding(
+                .info, category: "standard-suite",
+                message: "Application class does not declare 'window' elements"
+            ))
+        }
+        if !elemTypes.contains("document") {
+            findings.append(LintFinding(
+                .info, category: "standard-suite",
+                message: "Application class does not declare 'document' elements"
+            ))
+        }
+
+        // Check for standard commands
+        for (cmdName, expectedCode) in Self.standardSuiteCommands {
+            if let cmd = dictionary.commands[cmdName] {
+                if cmd.code != expectedCode {
+                    findings.append(LintFinding(
+                        .warning, category: "standard-suite",
+                        message: "Command '\(cmdName)' has code '\(cmd.code)' instead of expected '\(expectedCode)'"
+                    ))
+                }
+            }
+            // Not all apps need all standard commands, so missing ones are not flagged
+        }
+
+        return findings
+    }
+
+    // MARK: - Documentation quality
+
+    private func checkDocumentationQuality() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        var classesWithoutDesc = 0
+        var classesTotal = 0
+        for cls in dictionary.classes.values {
+            if cls.hidden { continue }
+            classesTotal += 1
+            if cls.description == nil || cls.description!.isEmpty {
+                classesWithoutDesc += 1
+            }
+        }
+
+        var commandsWithoutDesc = 0
+        var commandsTotal = 0
+        for cmd in dictionary.commands.values {
+            if cmd.hidden { continue }
+            commandsTotal += 1
+            if cmd.description == nil || cmd.description!.isEmpty {
+                commandsWithoutDesc += 1
+            }
+        }
+
+        if classesTotal > 0 && classesWithoutDesc > 0 {
+            let pct = (classesWithoutDesc * 100) / classesTotal
+            findings.append(LintFinding(
+                .info, category: "documentation",
+                message: "\(classesWithoutDesc) of \(classesTotal) classes (\(pct)%) have no description"
+            ))
+        }
+
+        if commandsTotal > 0 && commandsWithoutDesc > 0 {
+            let pct = (commandsWithoutDesc * 100) / commandsTotal
+            findings.append(LintFinding(
+                .info, category: "documentation",
+                message: "\(commandsWithoutDesc) of \(commandsTotal) commands (\(pct)%) have no description"
+            ))
         }
 
         return findings

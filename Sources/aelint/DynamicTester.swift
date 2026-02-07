@@ -33,6 +33,9 @@ struct DynamicTester {
         // Test 3: For elements with count > 0, test getting properties of first element
         findings.append(contentsOf: testFirstElementProperties())
 
+        // Test 4: Test access forms (by index, by name) on elements
+        findings.append(contentsOf: testAccessForms())
+
         return findings
     }
 
@@ -249,5 +252,128 @@ struct DynamicTester {
         }
 
         return findings
+    }
+
+    // MARK: - Access form testing
+
+    /// Test different access forms (by index, by name, by ID) on elements that have instances.
+    private func testAccessForms() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        guard let appClass = dictionary.findClass("application") else {
+            return findings
+        }
+
+        let allElems = dictionary.allElements(for: appClass)
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+
+            // Check if there are any elements
+            let count: Int
+            do {
+                count = try sender.sendCountEvent(
+                    to: appName,
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    timeoutSeconds: 10
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            var forms: [String] = []
+
+            // Test by-index (already known to work from testFirstElementProperties)
+            forms.append("by index")
+
+            // Test by-name: get name of first, then access by that name
+            let allProps = dictionary.allProperties(for: elemClass)
+            let hasNameProp = allProps.contains { $0.code == "pnam" }
+
+            if hasNameProp {
+                let firstElemSpec = builder.buildElementWithPredicate(
+                    code: elemClass.code,
+                    predicate: .byIndex(1),
+                    container: NSAppleEventDescriptor.null()
+                )
+                let nameSpec = builder.buildPropertySpecifier(
+                    code: "pnam",
+                    container: firstElemSpec
+                )
+                if let nameReply = try? sender.sendGetEvent(to: appName, specifier: nameSpec, timeoutSeconds: 10),
+                   let name = nameReply.stringValue, !name.isEmpty {
+                    // Now try to access by that name
+                    let byNameSpec = builder.buildElementWithPredicate(
+                        code: elemClass.code,
+                        predicate: .byName(name),
+                        container: NSAppleEventDescriptor.null()
+                    )
+                    let byNamePropSpec = builder.buildPropertySpecifier(
+                        code: "pnam",
+                        container: byNameSpec
+                    )
+                    if let _ = try? sender.sendGetEvent(to: appName, specifier: byNamePropSpec, timeoutSeconds: 10) {
+                        forms.append("by name")
+                    }
+                }
+            }
+
+            // Test by-ID: check if class has an 'id' property (ID  )
+            let hasIDProp = allProps.contains { $0.code == "ID  " }
+            if hasIDProp {
+                let firstElemSpec = builder.buildElementWithPredicate(
+                    code: elemClass.code,
+                    predicate: .byIndex(1),
+                    container: NSAppleEventDescriptor.null()
+                )
+                let idSpec = builder.buildPropertySpecifier(
+                    code: "ID  ",
+                    container: firstElemSpec
+                )
+                if let idReply = try? sender.sendGetEvent(to: appName, specifier: idSpec, timeoutSeconds: 10) {
+                    // Try to use the ID to access the element
+                    let idValue: Value
+                    if idReply.descriptorType == typeType(for: "long") || idReply.descriptorType == typeType(for: "shor") {
+                        idValue = .integer(Int(idReply.int32Value))
+                    } else if let str = idReply.stringValue {
+                        idValue = .string(str)
+                    } else {
+                        idValue = .integer(Int(idReply.int32Value))
+                    }
+
+                    let byIDSpec = builder.buildElementWithPredicate(
+                        code: elemClass.code,
+                        predicate: .byID(idValue),
+                        container: NSAppleEventDescriptor.null()
+                    )
+                    let byIDPropSpec = builder.buildPropertySpecifier(
+                        code: "pnam",
+                        container: byIDSpec
+                    )
+                    if let _ = try? sender.sendGetEvent(to: appName, specifier: byIDPropSpec, timeoutSeconds: 10) {
+                        forms.append("by ID")
+                    }
+                }
+            }
+
+            findings.append(LintFinding(
+                .info, category: "dynamic-access",
+                message: "\(elemClass.name): supported access forms: \(forms.joined(separator: ", "))"
+            ))
+        }
+
+        return findings
+    }
+
+    private func typeType(for code: String) -> DescType {
+        let chars = Array(code.utf8)
+        guard chars.count == 4 else { return 0 }
+        return DescType(chars[0]) << 24 | DescType(chars[1]) << 16 | DescType(chars[2]) << 8 | DescType(chars[3])
     }
 }

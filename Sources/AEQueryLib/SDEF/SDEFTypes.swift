@@ -3,6 +3,8 @@ import Foundation
 public struct ScriptingDictionary {
     public var classes: [String: ClassDef] = [:]     // keyed by lowercase name
     public var enumerations: [String: EnumDef] = [:] // keyed by lowercase name
+    public var commands: [String: CommandDef] = [:]   // keyed by lowercase name
+    public var suiteNames: [String] = []              // suite names in order
     private var pluralToSingular: [String: String] = [:]  // lowercase plural → lowercase singular
 
     public init() {}
@@ -21,6 +23,7 @@ public struct ScriptingDictionary {
                 pluralName: classDef.pluralName ?? existing.pluralName,
                 inherits: baseInherits,
                 hidden: classDef.hidden,
+                description: classDef.description ?? existing.description,
                 properties: existing.properties + classDef.properties,
                 elements: existing.elements + classDef.elements
             )
@@ -123,16 +126,18 @@ public struct ClassDef: Equatable {
     public let pluralName: String?
     public let inherits: String?
     public let hidden: Bool
+    public let description: String?
     public var properties: [PropertyDef]
     public var elements: [ElementDef]
 
     public init(name: String, code: String, pluralName: String? = nil, inherits: String? = nil,
-                hidden: Bool = false, properties: [PropertyDef] = [], elements: [ElementDef] = []) {
+                hidden: Bool = false, description: String? = nil, properties: [PropertyDef] = [], elements: [ElementDef] = []) {
         self.name = name
         self.code = code
         self.pluralName = pluralName
         self.inherits = inherits
         self.hidden = hidden
+        self.description = description
         self.properties = properties
         self.elements = elements
     }
@@ -144,13 +149,15 @@ public struct PropertyDef: Equatable {
     public let type: String?
     public let access: PropertyAccess?
     public let hidden: Bool
+    public let description: String?
 
-    public init(name: String, code: String, type: String? = nil, access: PropertyAccess? = nil, hidden: Bool = false) {
+    public init(name: String, code: String, type: String? = nil, access: PropertyAccess? = nil, hidden: Bool = false, description: String? = nil) {
         self.name = name
         self.code = code
         self.type = type
         self.access = access
         self.hidden = hidden
+        self.description = description
     }
 }
 
@@ -191,5 +198,55 @@ public struct Enumerator: Equatable {
     public init(name: String, code: String) {
         self.name = name
         self.code = code
+    }
+}
+
+public struct CommandDef: Equatable {
+    public let name: String
+    public let code: String           // 8-char event code (class + ID, e.g. "aevtodoc")
+    public let description: String?
+    public let hidden: Bool
+    public let directParameter: CommandParam?
+    public let parameters: [CommandParam]
+    public let result: CommandResult?
+    public let suiteName: String?
+
+    public init(name: String, code: String, description: String? = nil, hidden: Bool = false,
+                directParameter: CommandParam? = nil, parameters: [CommandParam] = [],
+                result: CommandResult? = nil, suiteName: String? = nil) {
+        self.name = name
+        self.code = code
+        self.description = description
+        self.hidden = hidden
+        self.directParameter = directParameter
+        self.parameters = parameters
+        self.result = result
+        self.suiteName = suiteName
+    }
+}
+
+public struct CommandParam: Equatable {
+    public let name: String?          // nil for direct parameter
+    public let code: String?          // nil for direct parameter
+    public let type: String?
+    public let optional: Bool
+    public let description: String?
+
+    public init(name: String? = nil, code: String? = nil, type: String? = nil, optional: Bool = false, description: String? = nil) {
+        self.name = name
+        self.code = code
+        self.type = type
+        self.optional = optional
+        self.description = description
+    }
+}
+
+public struct CommandResult: Equatable {
+    public let type: String?
+    public let description: String?
+
+    public init(type: String? = nil, description: String? = nil) {
+        self.type = type
+        self.description = description
     }
 }
