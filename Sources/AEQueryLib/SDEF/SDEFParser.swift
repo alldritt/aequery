@@ -158,7 +158,7 @@ public struct SDEFParser {
             guard let propElement = node as? XMLElement,
                   let name = propElement.attribute(forName: "name")?.stringValue,
                   let code = propElement.attribute(forName: "code")?.stringValue else { continue }
-            let type = propElement.attribute(forName: "type")?.stringValue
+            let type = resolveType(from: propElement)
             let accessStr = propElement.attribute(forName: "access")?.stringValue
             let access = accessStr.flatMap { PropertyAccess(rawValue: $0) }
             let hidden = propElement.attribute(forName: "hidden")?.stringValue == "yes"
@@ -178,6 +178,28 @@ public struct SDEFParser {
             elems.append(ElementDef(type: type, access: access, hidden: hidden))
         }
         return elems
+    }
+
+    /// Resolve the type for a property, parameter, or result element.
+    /// Checks the `type` attribute first, then falls back to nested `<type>` child elements.
+    private func resolveType(from element: XMLElement) -> String? {
+        // Prefer the inline type attribute
+        if let type = element.attribute(forName: "type")?.stringValue {
+            return type
+        }
+        // Fall back to nested <type> child elements
+        guard let typeNodes = try? element.nodes(forXPath: "type"),
+              !typeNodes.isEmpty else { return nil }
+        var types: [String] = []
+        for node in typeNodes {
+            guard let typeElement = node as? XMLElement,
+                  typeElement.attribute(forName: "hidden")?.stringValue != "yes",
+                  let typeName = typeElement.attribute(forName: "type")?.stringValue,
+                  typeName != "missing value" else { continue }
+            let isList = typeElement.attribute(forName: "list")?.stringValue == "yes"
+            types.append(isList ? "list of \(typeName)" : typeName)
+        }
+        return types.isEmpty ? nil : types.joined(separator: " / ")
     }
 
     private func parseEnumeration(_ element: XMLElement) -> EnumDef {
@@ -202,7 +224,7 @@ public struct SDEFParser {
         // Parse direct-parameter
         var directParam: CommandParam? = nil
         if let dpNode = (try? element.nodes(forXPath: "direct-parameter"))?.first as? XMLElement {
-            let dpType = dpNode.attribute(forName: "type")?.stringValue
+            let dpType = resolveType(from: dpNode)
             let dpOptional = dpNode.attribute(forName: "optional")?.stringValue == "yes"
             let dpDesc = dpNode.attribute(forName: "description")?.stringValue
             directParam = CommandParam(type: dpType, optional: dpOptional, description: dpDesc)
@@ -214,7 +236,7 @@ public struct SDEFParser {
             guard let paramElement = node as? XMLElement else { continue }
             let pName = paramElement.attribute(forName: "name")?.stringValue
             let pCode = paramElement.attribute(forName: "code")?.stringValue
-            let pType = paramElement.attribute(forName: "type")?.stringValue
+            let pType = resolveType(from: paramElement)
             let pOptional = paramElement.attribute(forName: "optional")?.stringValue == "yes"
             let pDesc = paramElement.attribute(forName: "description")?.stringValue
             params.append(CommandParam(name: pName, code: pCode, type: pType, optional: pOptional, description: pDesc))
@@ -223,7 +245,7 @@ public struct SDEFParser {
         // Parse result
         var result: CommandResult? = nil
         if let resNode = (try? element.nodes(forXPath: "result"))?.first as? XMLElement {
-            let resType = resNode.attribute(forName: "type")?.stringValue
+            let resType = resolveType(from: resNode)
             let resDesc = resNode.attribute(forName: "description")?.stringValue
             result = CommandResult(type: resType, description: resDesc)
         }

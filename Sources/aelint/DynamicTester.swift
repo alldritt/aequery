@@ -222,6 +222,39 @@ struct DynamicTester {
         }
     }
 
+    /// Probe whether a command handler exists by sending a raw event with no parameters.
+    /// Returns the error code (0 for success, -1708 for not handled, other for handled-but-failed).
+    private func probeCommand(
+        eventClass: FourCharCode,
+        eventID: FourCharCode,
+        command: String
+    ) -> Int {
+        logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
+        do {
+            _ = try sender.sendRawEvent(to: appName, eventClass: eventClass, eventID: eventID, timeoutSeconds: min(timeout, 5))
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult("ok", elapsed: elapsed)
+            return 0
+        } catch let error as AEQueryError {
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            if case .appleEventFailed(let code, _, _) = error {
+                logResult("error \(code)", elapsed: elapsed)
+                return code
+            }
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
+            return -1
+        } catch {
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
+            return -1
+        }
+    }
+
     private func logEvent(_ command: String) {
         guard log else { return }
         FileHandle.standardError.write(Data("  \u{2192} \(command)\n".utf8))
@@ -300,6 +333,8 @@ struct DynamicTester {
             ("Whose clause operators", testWhoseOperators),
             ("Numeric whose operators", testNumericWhoseOperators),
             ("Make/delete round-trip", testMakeDeleteRoundTrip),
+            ("Ordinal access", testOrdinalAccess),
+            ("Command testing", testCommandInvocation),
         ]
 
         for (name, phase) in phases {
@@ -2375,6 +2410,166 @@ struct DynamicTester {
             findings.append(LintFinding(
                 .info, category: "dynamic-crud",
                 message: "Make/delete: \(makeSuccess) make succeeded, \(makeFail) failed, \(deleteSuccess) delete succeeded, \(deleteFail) failed"
+            ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Ordinal access testing
+
+    private func testOrdinalAccess() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            var supported: [String] = []
+            var unsupported: [String] = []
+
+            // Test first
+            let firstSpec = buildOrdinalElement(
+                code: elemClass.code,
+                ordinal: AEConstants.kAEFirst,
+                container: NSAppleEventDescriptor.null()
+            )
+            if testGetItemQuietly(spec: firstSpec, command: "get first \(elemClass.name) of \(appRef)") {
+                supported.append("first")
+            } else {
+                unsupported.append("first")
+            }
+
+            // Test last
+            let lastSpec = buildOrdinalElement(
+                code: elemClass.code,
+                ordinal: AEConstants.kAELast,
+                container: NSAppleEventDescriptor.null()
+            )
+            if testGetItemQuietly(spec: lastSpec, command: "get last \(elemClass.name) of \(appRef)") {
+                supported.append("last")
+            } else {
+                unsupported.append("last")
+            }
+
+            // Test middle (only meaningful with 1+ elements)
+            let middleSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byOrdinal(.middle),
+                container: NSAppleEventDescriptor.null()
+            )
+            if testGetItemQuietly(spec: middleSpec, command: "get middle \(elemClass.name) of \(appRef)") {
+                supported.append("middle")
+            } else {
+                unsupported.append("middle")
+            }
+
+            // Test some (random)
+            let someSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byOrdinal(.some),
+                container: NSAppleEventDescriptor.null()
+            )
+            if testGetItemQuietly(spec: someSpec, command: "get some \(elemClass.name) of \(appRef)") {
+                supported.append("some")
+            } else {
+                unsupported.append("some")
+            }
+
+            // Test negative index (-1 = last)
+            let negSpec = buildNegativeIndexElement(
+                code: elemClass.code,
+                index: -1,
+                container: NSAppleEventDescriptor.null()
+            )
+            if testGetItemQuietly(spec: negSpec, command: "get \(elemClass.name) -1 of \(appRef)") {
+                supported.append("-1")
+            } else {
+                unsupported.append("-1")
+            }
+
+            let elemPlural = elemClass.pluralName ?? elemClass.name
+            findings.append(LintFinding(
+                .info, category: "dynamic-ordinal",
+                message: "\(elemPlural) ordinals: \(supported.joined(separator: ", "))"
+            ))
+            if !unsupported.isEmpty {
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-ordinal",
+                    message: "\(elemPlural) unsupported ordinals: \(unsupported.joined(separator: ", "))"
+                ))
+            }
+        }
+
+        return findings
+    }
+
+    // MARK: - Command invocation testing
+
+    private func testCommandInvocation() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        // Commands we already test implicitly or that are dangerous to invoke
+        let skipCommands: Set<String> = [
+            "get", "set", "count", "exists", "make", "delete",
+            "quit", "close", "save", "print", "move", "duplicate",
+            "open", "reopen", "activate", "launch", "run",
+        ]
+
+        var handledCount = 0
+        var unhandledCount = 0
+
+        for cmd in dictionary.commands.values {
+            if cmd.hidden { continue }
+            if skipCommands.contains(cmd.name.lowercased()) { continue }
+
+            let code = cmd.code
+            guard code.count == 8,
+                  let codeData = code.data(using: .macOSRoman),
+                  codeData.count == 8 else {
+                continue
+            }
+
+            let eventClass = FourCharCode(String(code.prefix(4)))
+            let eventID = FourCharCode(String(code.suffix(4)))
+            let probeCmd = "\(cmd.name) [probe \(code)]"
+
+            let errCode = probeCommand(eventClass: eventClass, eventID: eventID, command: probeCmd)
+
+            if errCode == -1708 {
+                // Event not handled — the app doesn't implement this command
+                unhandledCount += 1
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-cmd",
+                    message: "Command '\(cmd.name)' (\(code)) is not handled by the application"
+                ))
+            } else {
+                // Any other response (including parameter errors) means the handler exists
+                handledCount += 1
+            }
+        }
+
+        if handledCount > 0 || unhandledCount > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-cmd",
+                message: "Command testing: \(handledCount) handled, \(unhandledCount) not handled (of \(handledCount + unhandledCount) tested)"
             ))
         }
 

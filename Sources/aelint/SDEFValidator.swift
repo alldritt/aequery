@@ -70,6 +70,8 @@ struct SDEFValidator {
         findings.append(contentsOf: checkStandardSuiteCompliance())
         findings.append(contentsOf: checkDocumentationQuality())
         findings.append(contentsOf: checkCodeValidity())
+        findings.append(contentsOf: checkHiddenItems())
+        findings.append(contentsOf: checkEmptyClasses())
 
         return findings
     }
@@ -561,6 +563,56 @@ struct SDEFValidator {
                 findings.append(LintFinding(
                     .error, category: "invalid-code",
                     message: "Command '\(cmd.name)' has invalid event code '\(cmd.code)' (\(data.count) bytes, expected 8)"
+                ))
+            }
+        }
+
+        return findings
+    }
+
+    // MARK: - Hidden items audit
+
+    private func checkHiddenItems() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        let hiddenClasses = dictionary.classes.values.filter(\.hidden)
+        let hiddenCommands = dictionary.commands.values.filter(\.hidden)
+
+        var hiddenPropCount = 0
+        for cls in dictionary.classes.values {
+            hiddenPropCount += cls.properties.filter(\.hidden).count
+        }
+
+        if !hiddenClasses.isEmpty || hiddenPropCount > 0 || !hiddenCommands.isEmpty {
+            var parts: [String] = []
+            if !hiddenClasses.isEmpty { parts.append("\(hiddenClasses.count) classes") }
+            if hiddenPropCount > 0 { parts.append("\(hiddenPropCount) properties") }
+            if !hiddenCommands.isEmpty { parts.append("\(hiddenCommands.count) commands") }
+            findings.append(LintFinding(
+                .info, category: "hidden-items",
+                message: "Hidden items: \(parts.joined(separator: ", "))"
+            ))
+        }
+
+        return findings
+    }
+
+    // MARK: - Empty classes
+
+    private func checkEmptyClasses() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        for cls in dictionary.classes.values {
+            if cls.hidden { continue }
+            if cls.name.lowercased() == "application" { continue }
+
+            let allProps = dictionary.allProperties(for: cls).filter { !$0.hidden }
+            let allElems = dictionary.allElements(for: cls).filter { !$0.hidden }
+
+            if allProps.isEmpty && allElems.isEmpty {
+                findings.append(LintFinding(
+                    .info, category: "empty-class",
+                    message: "Class '\(cls.name)' has no visible properties or elements"
                 ))
             }
         }

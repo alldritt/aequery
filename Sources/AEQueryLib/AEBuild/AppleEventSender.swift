@@ -279,6 +279,45 @@ public struct AppleEventSender {
         }
     }
 
+    /// Send a raw Apple Event with a given event class and event ID, no parameters.
+    /// Returns the reply descriptor. Used for probing whether a command handler exists.
+    public func sendRawEvent(to appName: String, eventClass: FourCharCode, eventID: FourCharCode, timeoutSeconds: Int = 5) throws -> NSAppleEventDescriptor {
+        let targetApp = try resolveTargetDescriptor(appName)
+
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: eventClass,
+            eventID: eventID,
+            targetDescriptor: targetApp,
+            returnID: -1,
+            transactionID: 0
+        )
+
+        var replyEvent = AppleEvent()
+        var mutableDesc = event.aeDesc!.pointee
+        let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
+        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
+
+        guard err == noErr else {
+            throw AEQueryError.appleEventFailed(Int(err), "", nil)
+        }
+        let reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
+
+        // Check for error in reply
+        if let errDesc = reply.paramDescriptor(forKeyword: AEConstants.errorNumber) {
+            let errNum = Int(errDesc.int32Value)
+            if errNum != 0 {
+                let errMsg = reply.paramDescriptor(forKeyword: AEConstants.errorString)?.stringValue
+                throw AEQueryError.appleEventFailed(errNum, errMsg ?? "", nil)
+            }
+        }
+
+        if let result = reply.paramDescriptor(forKeyword: AEKeyword(AEConstants.keyDirectObject)) {
+            return result
+        }
+
+        return NSAppleEventDescriptor.null()
+    }
+
     /// Resolve app name to a target descriptor, preferring process ID for running apps.
     private func resolveTargetDescriptor(_ appName: String) throws -> NSAppleEventDescriptor {
         // First check running applications by name

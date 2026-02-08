@@ -31,6 +31,12 @@ struct AELintCommand: ParsableCommand {
     @Option(name: .long, help: "Per-event timeout in seconds for dynamic tests (default 10)")
     var timeout: Int = 10
 
+    @Option(name: .long, help: "Minimum severity to display: error, warning, or info (default: info)")
+    var severity: String = "info"
+
+    @Flag(name: .long, help: "Output report as HTML")
+    var html: Bool = false
+
     func run() throws {
         // Load SDEF
         let dictionary: ScriptingDictionary
@@ -60,11 +66,17 @@ struct AELintCommand: ParsableCommand {
             findings.append(contentsOf: tester.runTests(pathFinder: pathFinder))
         }
 
+        // Apply severity filter
+        let minSeverity = parseSeverity(severity)
+        let filteredFindings = findings.filter { severityRank($0.severity) >= severityRank(minSeverity) }
+
         // Output report
         if json {
-            printJSONReport(findings, timer: eventTimer)
+            printJSONReport(filteredFindings, timer: eventTimer)
+        } else if html {
+            printHTMLReport(filteredFindings, dictionary: dictionary, timer: eventTimer)
         } else {
-            printTextReport(findings, dictionary: dictionary, timer: eventTimer)
+            printTextReport(filteredFindings, dictionary: dictionary, timer: eventTimer)
         }
 
         // Exit with failure if any errors found
@@ -144,6 +156,8 @@ struct AELintCommand: ParsableCommand {
             ("dynamic-pall", "Properties record"),
             ("dynamic-whose-num", "Numeric whose operators"),
             ("dynamic-crud", "Make/delete round-trip"),
+            ("dynamic-ordinal", "Ordinal access"),
+            ("dynamic-cmd", "Command testing"),
             ("dynamic-timing", "Timing"),
         ]
 
@@ -280,5 +294,178 @@ struct AELintCommand: ParsableCommand {
            let str = String(data: data, encoding: .utf8) {
             print(str)
         }
+    }
+
+    // MARK: - Severity filtering
+
+    private func parseSeverity(_ str: String) -> LintSeverity {
+        switch str.lowercased() {
+        case "error": return .error
+        case "warning": return .warning
+        default: return .info
+        }
+    }
+
+    private func severityRank(_ severity: LintSeverity) -> Int {
+        switch severity {
+        case .error: return 3
+        case .warning: return 2
+        case .info: return 1
+        }
+    }
+
+    // MARK: - HTML report
+
+    private func printHTMLReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil) {
+        let errors = findings.filter { $0.severity == .error }
+        let warnings = findings.filter { $0.severity == .warning }
+        let info = findings.filter { $0.severity == .info }
+        let (score, grade) = computeQualityScore(findings)
+
+        let enumCount = dictionary.enumerations.count
+        let cmdCount = dictionary.commands.count
+
+        var h = ""
+        h += "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        h += "<title>aelint report — \(escapeHTML(appName))</title>\n"
+        h += "<style>\n"
+        h += """
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 2em; background: #fafafa; color: #222; }
+        h1 { border-bottom: 2px solid #333; padding-bottom: 0.3em; }
+        h2 { margin-top: 1.5em; color: #444; }
+        .summary { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 1em 1.5em; margin-bottom: 1.5em; }
+        .score { font-size: 2em; font-weight: bold; display: inline-block; margin-right: 0.5em; }
+        .grade-A { color: #2a7; } .grade-B { color: #5a5; } .grade-C { color: #da5; } .grade-D { color: #d85; } .grade-F { color: #d44; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
+        th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
+        th { background: #f5f5f5; font-weight: 600; }
+        .sev-error { color: #c33; font-weight: bold; }
+        .sev-warning { color: #b80; }
+        .sev-info { color: #48a; }
+        .context { color: #888; font-size: 0.9em; font-style: italic; }
+        .phase-ok { color: #2a7; } .phase-warn { color: #b80; } .phase-err { color: #c33; }
+        .timing-table td:first-child { text-align: right; font-variant-numeric: tabular-nums; }
+        footer { margin-top: 2em; color: #999; font-size: 0.85em; }
+        """
+        h += "\n</style>\n</head>\n<body>\n"
+
+        // Header
+        h += "<h1>aelint report for \(escapeHTML(appName))</h1>\n"
+
+        // Summary box
+        h += "<div class=\"summary\">\n"
+        h += "<span class=\"score grade-\(grade)\">\(score)/100 (\(grade))</span>\n"
+        h += "<br>Classes: \(dictionary.classes.count), Commands: \(cmdCount), Enumerations: \(enumCount)<br>\n"
+        h += "Findings: <span class=\"sev-error\">\(errors.count) errors</span>, "
+        h += "<span class=\"sev-warning\">\(warnings.count) warnings</span>, "
+        h += "<span class=\"sev-info\">\(info.count) info</span>\n"
+        h += "</div>\n"
+
+        // Findings table
+        if !findings.isEmpty {
+            h += "<h2>Findings</h2>\n"
+            h += "<table>\n<tr><th>Severity</th><th>Category</th><th>Message</th></tr>\n"
+            for finding in findings {
+                let sevClass = "sev-\(finding.severity.rawValue)"
+                h += "<tr>"
+                h += "<td class=\"\(sevClass)\">\(finding.severity.symbol) \(finding.severity.rawValue)</td>"
+                h += "<td>\(escapeHTML(finding.category))</td>"
+                h += "<td>\(escapeHTML(finding.message))"
+                if let ctx = finding.context {
+                    h += "<br><span class=\"context\">\(escapeHTML(ctx))</span>"
+                }
+                h += "</td></tr>\n"
+            }
+            h += "</table>\n"
+        } else {
+            h += "<p>No issues found.</p>\n"
+        }
+
+        // Dynamic test summary
+        if dynamic {
+            let dynamicFindings = findings.filter { $0.category.hasPrefix("dynamic") }
+            if !dynamicFindings.isEmpty {
+                h += "<h2>Dynamic Test Summary</h2>\n"
+                h += "<table>\n<tr><th>Phase</th><th>Result</th></tr>\n"
+
+                let categories: [(prefix: String, label: String)] = [
+                    ("dynamic-property", "Application properties"),
+                    ("dynamic-count", "Element counting"),
+                    ("dynamic-element-prop", "Element properties"),
+                    ("dynamic-access", "Access forms"),
+                    ("dynamic-explore", "Sub-element exploration"),
+                    ("dynamic-every", "Every-element retrieval"),
+                    ("dynamic-whose", "Whose clause (equals)"),
+                    ("dynamic-whose-ops", "Whose clause operators"),
+                    ("dynamic-exists", "Exists event"),
+                    ("dynamic-type", "Type validation"),
+                    ("dynamic-range", "Range access"),
+                    ("dynamic-inherit", "Inherited properties"),
+                    ("dynamic-error", "Error handling"),
+                    ("dynamic-set", "Set property"),
+                    ("dynamic-pall", "Properties record"),
+                    ("dynamic-whose-num", "Numeric whose operators"),
+                    ("dynamic-crud", "Make/delete round-trip"),
+                    ("dynamic-ordinal", "Ordinal access"),
+                    ("dynamic-cmd", "Command testing"),
+                    ("dynamic-timing", "Timing"),
+                ]
+
+                for (prefix, label) in categories {
+                    let catFindings = dynamicFindings.filter { $0.category == prefix }
+                    guard !catFindings.isEmpty else { continue }
+
+                    let hasErrors = catFindings.contains { $0.severity == .error }
+                    let hasWarnings = catFindings.contains { $0.severity == .warning }
+                    let phaseClass = hasErrors ? "phase-err" : (hasWarnings ? "phase-warn" : "phase-ok")
+
+                    if let summary = prefix == "dynamic-timing"
+                        ? catFindings.first(where: { $0.severity == .info })
+                        : catFindings.last(where: { $0.severity == .info }) {
+                        let msg = stripLabelPrefix(summary.message, label: label)
+                        h += "<tr><td class=\"\(phaseClass)\">\(escapeHTML(label))</td><td>\(escapeHTML(msg))</td></tr>\n"
+                    } else if let first = catFindings.first {
+                        h += "<tr><td class=\"\(phaseClass)\">\(escapeHTML(label))</td><td>\(escapeHTML(first.message))</td></tr>\n"
+                    }
+                }
+                h += "</table>\n"
+            }
+        }
+
+        // Timing
+        if let timer = timer, !timer.events.isEmpty {
+            let total = timer.totalDuration
+            let avg = total / Double(timer.events.count)
+
+            h += "<h2>Event Timing</h2>\n"
+            h += "<p>Events: \(timer.events.count), Total: \(String(format: "%.1f", total))s, "
+            h += "Avg: \(String(format: "%.3f", avg))s"
+            if timer.timeoutCount > 0 {
+                h += ", <span class=\"sev-error\">Timeouts: \(timer.timeoutCount)</span>"
+            }
+            h += "</p>\n"
+
+            let slowest = timer.slowestEvents.prefix(10)
+            h += "<table class=\"timing-table\">\n<tr><th>Time</th><th>Event</th></tr>\n"
+            for event in slowest {
+                let marker = event.isTimeout ? " <span class=\"sev-error\">TIMEOUT</span>" : ""
+                h += "<tr><td>\(String(format: "%.3f", event.duration))s\(marker)</td>"
+                h += "<td>\(escapeHTML(event.command))</td></tr>\n"
+            }
+            h += "</table>\n"
+        }
+
+        // Footer
+        h += "<footer>Generated by aelint \(AELintCommand.configuration.version)</footer>\n"
+        h += "</body>\n</html>\n"
+
+        print(h)
+    }
+
+    private func escapeHTML(_ str: String) -> String {
+        str.replacingOccurrences(of: "&", with: "&amp;")
+           .replacingOccurrences(of: "<", with: "&lt;")
+           .replacingOccurrences(of: ">", with: "&gt;")
+           .replacingOccurrences(of: "\"", with: "&quot;")
     }
 }
