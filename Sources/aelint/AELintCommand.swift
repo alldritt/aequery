@@ -28,6 +28,9 @@ struct AELintCommand: ParsableCommand {
     @Option(name: .long, help: "Maximum containment depth for path enumeration (default 6)")
     var maxDepth: Int = 6
 
+    @Option(name: .long, help: "Per-event timeout in seconds for dynamic tests (default 10)")
+    var timeout: Int = 10
+
     func run() throws {
         // Load SDEF
         let dictionary: ScriptingDictionary
@@ -53,7 +56,7 @@ struct AELintCommand: ParsableCommand {
         if dynamic {
             let timer = EventTimer()
             eventTimer = timer
-            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log, timer: timer)
+            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log, timer: timer, timeout: timeout)
             findings.append(contentsOf: tester.runTests(pathFinder: pathFinder))
         }
 
@@ -109,6 +112,9 @@ struct AELintCommand: ParsableCommand {
                 printTimingReport(timer)
             }
         }
+
+        // Quality score
+        printQualityScore(findings)
     }
 
     private func printDynamicSummary(_ findings: [LintFinding]) {
@@ -136,6 +142,8 @@ struct AELintCommand: ParsableCommand {
             ("dynamic-error", "Error handling"),
             ("dynamic-set", "Set property"),
             ("dynamic-pall", "Properties record"),
+            ("dynamic-whose-num", "Numeric whose operators"),
+            ("dynamic-crud", "Make/delete round-trip"),
             ("dynamic-timing", "Timing"),
         ]
 
@@ -199,6 +207,36 @@ struct AELintCommand: ParsableCommand {
         print()
     }
 
+    private func computeQualityScore(_ findings: [LintFinding]) -> (score: Int, grade: String) {
+        let errors = findings.filter { $0.severity == .error }.count
+        let warnings = findings.filter { $0.severity == .warning }.count
+
+        // Start at 100, deduct for issues (with caps to prevent floor-out)
+        let errorPenalty = min(40, errors * 5)
+        let warningPenalty = min(30, warnings)
+        var score = 100 - errorPenalty - warningPenalty
+        score = max(0, min(100, score))
+
+        let grade: String
+        switch score {
+        case 90...100: grade = "A"
+        case 80..<90: grade = "B"
+        case 70..<80: grade = "C"
+        case 60..<70: grade = "D"
+        default: grade = "F"
+        }
+
+        return (score, grade)
+    }
+
+    private func printQualityScore(_ findings: [LintFinding]) {
+        let (score, grade) = computeQualityScore(findings)
+
+        print(String(repeating: "=", count: 40))
+        print("Quality Score: \(score)/100 (\(grade))")
+        print(String(repeating: "=", count: 40))
+    }
+
     private func printJSONReport(_ findings: [LintFinding], timer: EventTimer? = nil) {
         var report: [String: Any] = [:]
 
@@ -214,6 +252,9 @@ struct AELintCommand: ParsableCommand {
             return dict
         }
         report["findings"] = items
+
+        let (score, grade) = computeQualityScore(findings)
+        report["qualityScore"] = ["score": score, "grade": grade] as [String: Any]
 
         if let timer = timer {
             var timing: [String: Any] = [

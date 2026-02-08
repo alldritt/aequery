@@ -34,16 +34,18 @@ struct DynamicTester {
     let maxDepth: Int
     let log: Bool
     let timer: EventTimer
+    let timeout: Int
 
     private let sender = AppleEventSender()
     private let builder: ObjectSpecifierBuilder
 
-    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int, log: Bool = false, timer: EventTimer = EventTimer()) {
+    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int, log: Bool = false, timer: EventTimer = EventTimer(), timeout: Int = 10) {
         self.dictionary = dictionary
         self.appName = appName
         self.maxDepth = maxDepth
         self.log = log
         self.timer = timer
+        self.timeout = timeout
         self.builder = ObjectSpecifierBuilder(dictionary: dictionary)
     }
 
@@ -97,7 +99,7 @@ struct DynamicTester {
         logEvent(command)
         let start = CFAbsoluteTimeGetCurrent()
         do {
-            let result = try sender.sendGetEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
+            let result = try sender.sendGetEvent(to: appName, specifier: specifier, timeoutSeconds: timeout)
             let elapsed = CFAbsoluteTimeGetCurrent() - start
             timer.record(command: command, duration: elapsed)
             logResult(describeResult(result), elapsed: elapsed)
@@ -120,7 +122,7 @@ struct DynamicTester {
         let start = CFAbsoluteTimeGetCurrent()
         do {
             let count = try sender.sendCountEvent(
-                to: appName, container: container, elementCode: elementCode, timeoutSeconds: 10
+                to: appName, container: container, elementCode: elementCode, timeoutSeconds: timeout
             )
             let elapsed = CFAbsoluteTimeGetCurrent() - start
             timer.record(command: command, duration: elapsed)
@@ -142,7 +144,7 @@ struct DynamicTester {
         logEvent(command)
         let start = CFAbsoluteTimeGetCurrent()
         do {
-            let exists = try sender.sendExistsEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
+            let exists = try sender.sendExistsEvent(to: appName, specifier: specifier, timeoutSeconds: timeout)
             let elapsed = CFAbsoluteTimeGetCurrent() - start
             timer.record(command: command, duration: elapsed)
             logResult("\(exists)", elapsed: elapsed)
@@ -164,7 +166,50 @@ struct DynamicTester {
         logEvent(command)
         let start = CFAbsoluteTimeGetCurrent()
         do {
-            try sender.sendSetEvent(to: appName, specifier: specifier, value: value, timeoutSeconds: 10)
+            try sender.sendSetEvent(to: appName, specifier: specifier, value: value, timeoutSeconds: timeout)
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult("ok", elapsed: elapsed)
+        } catch {
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
+            throw error
+        }
+    }
+
+    @discardableResult
+    private func sendMake(
+        elementCode: FourCharCode,
+        container: NSAppleEventDescriptor? = nil,
+        command: String
+    ) throws -> NSAppleEventDescriptor {
+        logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
+        do {
+            let result = try sender.sendMakeEvent(to: appName, elementCode: elementCode, container: container, timeoutSeconds: timeout)
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult(describeResult(result), elapsed: elapsed)
+            return result
+        } catch {
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
+            throw error
+        }
+    }
+
+    private func sendDelete(
+        _ specifier: NSAppleEventDescriptor,
+        command: String
+    ) throws {
+        logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
+        do {
+            try sender.sendDeleteEvent(to: appName, specifier: specifier, timeoutSeconds: timeout)
             let elapsed = CFAbsoluteTimeGetCurrent() - start
             timer.record(command: command, duration: elapsed)
             logResult("ok", elapsed: elapsed)
@@ -253,6 +298,8 @@ struct DynamicTester {
             ("Set property", testSetProperty),
             ("Properties record", testPropertiesRecord),
             ("Whose clause operators", testWhoseOperators),
+            ("Numeric whose operators", testNumericWhoseOperators),
+            ("Make/delete round-trip", testMakeDeleteRoundTrip),
         ]
 
         for (name, phase) in phases {
@@ -2044,6 +2091,291 @@ struct DynamicTester {
                     ))
                 }
             }
+        }
+
+        return findings
+    }
+
+    // MARK: - Numeric whose operators
+
+    private func testNumericWhoseOperators() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count >= 2 else { continue }
+
+            // Find a numeric property to test with (prefer "index" if available)
+            let allProps = dictionary.allProperties(for: elemClass)
+            let numericProp = allProps.first(where: { $0.code == "pidx" })
+                ?? allProps.first(where: {
+                    !$0.hidden && $0.access != .writeOnly &&
+                    ($0.type?.lowercased() == "integer" || $0.type?.lowercased() == "number")
+                })
+            guard let prop = numericProp else { continue }
+
+            // Get the value of this property from the first element
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+            let propSpec = builder.buildPropertySpecifier(code: prop.code, container: firstSpec)
+            let getCmd = "get \(prop.name) of \(elemClass.name) 1 of \(appRef)"
+
+            guard let propReply = try? sendGet(propSpec, command: getCmd) else { continue }
+            let propValue: Int
+            if propReply.descriptorType == typeType(for: "long") || propReply.descriptorType == typeType(for: "shor") {
+                propValue = Int(propReply.int32Value)
+            } else {
+                continue
+            }
+
+            let elemPlural = elemClass.pluralName ?? elemClass.name
+            var supported: [String] = []
+            var unsupported: [String] = []
+
+            // Test > (greater than) — use propValue - 1 to find elements with prop > (propValue - 1)
+            let ops: [(ComparisonOp, String, Int)] = [
+                (.greaterThan, ">", propValue - 1),
+                (.lessThan, "<", propValue + 1),
+                (.greaterOrEqual, ">=", propValue),
+                (.lessOrEqual, "<=", propValue),
+            ]
+
+            for (op, opStr, testVal) in ops {
+                let test = TestExpr(path: [prop.name], op: op, value: .integer(testVal))
+                let whoseSpec = builder.buildElementWithPredicate(
+                    code: elemClass.code,
+                    predicate: .test(test),
+                    container: NSAppleEventDescriptor.null()
+                )
+                let whosePropSpec = builder.buildPropertySpecifier(code: prop.code, container: whoseSpec)
+                let cmd = "get \(prop.name) of (every \(elemClass.name) whose \(prop.name) \(opStr) \(testVal)) of \(appRef)"
+
+                do {
+                    let result = try sendGet(whosePropSpec, command: cmd)
+                    // Verify result contains at least one matching value
+                    let values: [Int]
+                    if result.descriptorType == AEConstants.typeAEList {
+                        values = (1...result.numberOfItems).compactMap { i -> Int? in
+                            guard let item = result.atIndex(i) else { return nil }
+                            return Int(item.int32Value)
+                        }
+                    } else {
+                        values = [Int(result.int32Value)]
+                    }
+
+                    let allMatch: Bool
+                    switch op {
+                    case .greaterThan: allMatch = values.allSatisfy { $0 > testVal }
+                    case .lessThan: allMatch = values.allSatisfy { $0 < testVal }
+                    case .greaterOrEqual: allMatch = values.allSatisfy { $0 >= testVal }
+                    case .lessOrEqual: allMatch = values.allSatisfy { $0 <= testVal }
+                    default: allMatch = true
+                    }
+
+                    if allMatch && !values.isEmpty {
+                        supported.append(opStr)
+                    } else if values.isEmpty {
+                        unsupported.append(opStr)
+                    } else {
+                        unsupported.append(opStr)
+                        findings.append(LintFinding(
+                            .warning, category: "dynamic-whose-num",
+                            message: "\(elemPlural) whose \(prop.name) \(opStr) \(testVal): returned values that don't match filter",
+                            context: cmd
+                        ))
+                    }
+                } catch {
+                    unsupported.append(opStr)
+                }
+            }
+
+            if !supported.isEmpty || !unsupported.isEmpty {
+                findings.append(LintFinding(
+                    .info, category: "dynamic-whose-num",
+                    message: "\(elemPlural) numeric whose operators on \(prop.name): \(supported.isEmpty ? "none" : supported.joined(separator: ", "))"
+                ))
+                if !unsupported.isEmpty {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-whose-num",
+                        message: "\(elemPlural) unsupported numeric whose operators: \(unsupported.joined(separator: ", "))"
+                    ))
+                }
+            }
+        }
+
+        return findings
+    }
+
+    // MARK: - Make/delete round-trip testing
+
+    private func testMakeDeleteRoundTrip() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        // Only test if the app declares both 'make' and 'delete' commands
+        guard dictionary.commands["make"] != nil,
+              dictionary.commands["delete"] != nil else {
+            findings.append(LintFinding(
+                .info, category: "dynamic-crud",
+                message: "Skipping make/delete test: application does not declare both 'make' and 'delete' commands"
+            ))
+            return findings
+        }
+
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        let allElems = dictionary.allElements(for: appClass)
+        var makeSuccess = 0
+        var makeFail = 0
+        var deleteSuccess = 0
+        var deleteFail = 0
+
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            // Skip dangerous element types — only test document-like objects
+            let safeName = elemClass.name.lowercased()
+            let safeTypes: Set<String> = ["document", "window", "tab"]
+            guard safeTypes.contains(safeName) else { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+
+            // Count before
+            let countBefore: Int
+            do {
+                countBefore = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+
+            // Try to make a new element
+            let makeCmd = "make new \(elemClass.name)"
+            do {
+                let newObjSpec = try sendMake(
+                    elementCode: elementCode,
+                    command: makeCmd
+                )
+                makeSuccess += 1
+
+                // Verify count increased
+                let countAfterMake: Int
+                do {
+                    countAfterMake = try sendCount(
+                        container: NSAppleEventDescriptor.null(),
+                        elementCode: elementCode,
+                        command: "count every \(elemClass.name) of \(appRef)"
+                    )
+                } catch {
+                    countAfterMake = countBefore
+                }
+
+                if countAfterMake > countBefore {
+                    findings.append(LintFinding(
+                        .info, category: "dynamic-crud",
+                        message: "make new \(elemClass.name): count increased from \(countBefore) to \(countAfterMake)"
+                    ))
+                }
+
+                // Try to delete it
+                // Use the returned specifier if it's an object specifier, otherwise delete the last one
+                let deleteTarget: NSAppleEventDescriptor
+                if newObjSpec.descriptorType == AEConstants.typeObjectSpecifier {
+                    deleteTarget = newObjSpec
+                } else {
+                    // Fall back to deleting the last element
+                    deleteTarget = buildOrdinalElement(
+                        code: elemClass.code,
+                        ordinal: AEConstants.kAELast,
+                        container: NSAppleEventDescriptor.null()
+                    )
+                }
+
+                let deleteCmd = "delete \(elemClass.name)"
+                do {
+                    try sendDelete(deleteTarget, command: deleteCmd)
+                    deleteSuccess += 1
+
+                    // Verify count restored
+                    let countAfterDelete: Int
+                    do {
+                        countAfterDelete = try sendCount(
+                            container: NSAppleEventDescriptor.null(),
+                            elementCode: elementCode,
+                            command: "count every \(elemClass.name) of \(appRef)"
+                        )
+                    } catch {
+                        countAfterDelete = countAfterMake
+                    }
+
+                    if countAfterDelete <= countBefore {
+                        findings.append(LintFinding(
+                            .info, category: "dynamic-crud",
+                            message: "delete \(elemClass.name): count restored to \(countAfterDelete)"
+                        ))
+                    } else {
+                        findings.append(LintFinding(
+                            .warning, category: "dynamic-crud",
+                            message: "delete \(elemClass.name): count is \(countAfterDelete), expected \(countBefore) or less"
+                        ))
+                    }
+                } catch {
+                    deleteFail += 1
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-crud",
+                        message: "Cannot delete newly created \(elemClass.name): \(error.localizedDescription)",
+                        context: deleteCmd
+                    ))
+                }
+            } catch {
+                makeFail += 1
+                // -10000 or -10002 means the command isn't supported for this type — not a real failure
+                if let aeErr = error as? AEQueryError,
+                   case .appleEventFailed(let code, _, _) = aeErr,
+                   [-10000, -10002, -10003, -10004].contains(code) {
+                    findings.append(LintFinding(
+                        .info, category: "dynamic-crud",
+                        message: "make new \(elemClass.name) not supported (error \(code))"
+                    ))
+                } else {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-crud",
+                        message: "Cannot make new \(elemClass.name): \(error.localizedDescription)",
+                        context: makeCmd
+                    ))
+                }
+            }
+        }
+
+        if makeSuccess > 0 || makeFail > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-crud",
+                message: "Make/delete: \(makeSuccess) make succeeded, \(makeFail) failed, \(deleteSuccess) delete succeeded, \(deleteFail) failed"
+            ))
         }
 
         return findings

@@ -195,6 +195,90 @@ public struct AppleEventSender {
         }
     }
 
+    /// Send a 'make' Apple Event (core/crel) to create a new element.
+    /// Returns the object specifier of the newly created element.
+    public func sendMakeEvent(to appName: String, elementCode: FourCharCode, container: NSAppleEventDescriptor? = nil, timeoutSeconds: Int = 30) throws -> NSAppleEventDescriptor {
+        let targetApp = try resolveTargetDescriptor(appName)
+
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: AEConstants.kAECoreSuite,
+            eventID: AEConstants.kAECreateElement,
+            targetDescriptor: targetApp,
+            returnID: -1,
+            transactionID: 0
+        )
+
+        // kocl = class to create
+        event.setParam(
+            NSAppleEventDescriptor(typeCode: elementCode),
+            forKeyword: AEConstants.keyAEObjectClass
+        )
+
+        // insh = insertion location (optional)
+        if let container = container {
+            event.setParam(container, forKeyword: AEConstants.keyAEInsertHere)
+        }
+
+        var replyEvent = AppleEvent()
+        var mutableDesc = event.aeDesc!.pointee
+        let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
+        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
+
+        guard err == noErr else {
+            throw AEQueryError.appleEventFailed(Int(err), "", nil)
+        }
+        let reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
+
+        if let result = reply.paramDescriptor(forKeyword: AEKeyword(AEConstants.keyDirectObject)) {
+            return result
+        }
+
+        // Check for error in reply
+        if let errDesc = reply.paramDescriptor(forKeyword: AEConstants.errorNumber) {
+            let errNum = Int(errDesc.int32Value)
+            if errNum != 0 {
+                let errMsg = reply.paramDescriptor(forKeyword: AEConstants.errorString)?.stringValue
+                throw AEQueryError.appleEventFailed(errNum, errMsg ?? "", nil)
+            }
+        }
+
+        return NSAppleEventDescriptor.null()
+    }
+
+    /// Send a 'delete' Apple Event (core/delo) to delete an object.
+    public func sendDeleteEvent(to appName: String, specifier: NSAppleEventDescriptor, timeoutSeconds: Int = 30) throws {
+        let targetApp = try resolveTargetDescriptor(appName)
+
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: AEConstants.kAECoreSuite,
+            eventID: AEConstants.kAEDelete,
+            targetDescriptor: targetApp,
+            returnID: -1,
+            transactionID: 0
+        )
+
+        event.setParam(specifier, forKeyword: AEConstants.keyDirectObject)
+
+        var replyEvent = AppleEvent()
+        var mutableDesc = event.aeDesc!.pointee
+        let timeoutTicks = timeoutSeconds < 0 ? timeoutSeconds : timeoutSeconds * 60
+        let err = AESendMessage(&mutableDesc, &replyEvent, AESendMode(kAEWaitReply), Int(timeoutTicks))
+
+        guard err == noErr else {
+            throw AEQueryError.appleEventFailed(Int(err), "", nil)
+        }
+        let reply = NSAppleEventDescriptor(aeDescNoCopy: &replyEvent)
+
+        // Check for error in reply
+        if let errDesc = reply.paramDescriptor(forKeyword: AEConstants.errorNumber) {
+            let errNum = Int(errDesc.int32Value)
+            if errNum != 0 {
+                let errMsg = reply.paramDescriptor(forKeyword: AEConstants.errorString)?.stringValue
+                throw AEQueryError.appleEventFailed(errNum, errMsg ?? "", nil)
+            }
+        }
+    }
+
     /// Resolve app name to a target descriptor, preferring process ID for running apps.
     private func resolveTargetDescriptor(_ appName: String) throws -> NSAppleEventDescriptor {
         // First check running applications by name
