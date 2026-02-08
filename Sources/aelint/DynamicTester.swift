@@ -28,6 +28,25 @@ class EventTimer {
     }
 }
 
+/// Tracks which SDEF elements were actually exercised during dynamic testing.
+class CoverageTracker {
+    private(set) var testedClasses: Set<String> = []    // lowercase class names
+    private(set) var testedProperties: Set<String> = [] // "class.property" lowercase
+    private(set) var testedElements: Set<String> = []   // "class.element" lowercase
+
+    func recordClass(_ name: String) {
+        testedClasses.insert(name.lowercased())
+    }
+
+    func recordProperty(_ className: String, _ propertyName: String) {
+        testedProperties.insert("\(className.lowercased()).\(propertyName.lowercased())")
+    }
+
+    func recordElement(_ className: String, _ elementType: String) {
+        testedElements.insert("\(className.lowercased()).\(elementType.lowercased())")
+    }
+}
+
 struct DynamicTester {
     let dictionary: ScriptingDictionary
     let appName: String
@@ -35,6 +54,7 @@ struct DynamicTester {
     let log: Bool
     let timer: EventTimer
     let timeout: Int
+    let coverage: CoverageTracker
 
     private let sender = AppleEventSender()
     private let builder: ObjectSpecifierBuilder
@@ -46,6 +66,7 @@ struct DynamicTester {
         self.log = log
         self.timer = timer
         self.timeout = timeout
+        self.coverage = CoverageTracker()
         self.builder = ObjectSpecifierBuilder(dictionary: dictionary)
     }
 
@@ -337,7 +358,8 @@ struct DynamicTester {
             ("Command testing", testCommandInvocation),
         ]
 
-        for (name, phase) in phases {
+        for (i, (name, phase)) in phases.enumerated() {
+            logStderr("[\(i + 1)/\(phases.count)] \(name)...")
             let prevTimeouts = timer.timeoutCount
             let phaseFindings = phase()
             findings.append(contentsOf: phaseFindings)
@@ -364,6 +386,11 @@ struct DynamicTester {
 
         // Add timing summary findings
         appendTimingFindings(&findings, aborted: aborted)
+
+        // Add coverage summary findings
+        appendCoverageFindings(&findings)
+
+        logStderr("Done. \(timer.events.count) events sent.")
 
         return findings
     }
@@ -400,6 +427,51 @@ struct DynamicTester {
                 category: "dynamic-timing",
                 message: "Slow #\(i + 1): \(String(format: "%.3f", event.duration))s\(marker)",
                 context: event.command
+            ))
+        }
+    }
+
+    /// Append coverage summary: how many SDEF classes/properties/elements were actually exercised.
+    private func appendCoverageFindings(_ findings: inout [LintFinding]) {
+        // Total visible classes (excluding application)
+        let visibleClasses = dictionary.classes.values.filter { !$0.hidden && $0.name.lowercased() != "application" }
+        let totalClasses = visibleClasses.count
+        let testedClassCount = coverage.testedClasses.subtracting(["application"]).count
+
+        // Total visible properties across all classes
+        var totalProps = 0
+        for cls in dictionary.classes.values where !cls.hidden {
+            totalProps += dictionary.allProperties(for: cls).filter { !$0.hidden }.count
+        }
+        let testedPropCount = coverage.testedProperties.count
+
+        // Total visible elements across all classes
+        var totalElements = 0
+        for cls in dictionary.classes.values where !cls.hidden {
+            totalElements += dictionary.allElements(for: cls).filter { !$0.hidden }.count
+        }
+        let testedElemCount = coverage.testedElements.count
+
+        func pct(_ n: Int, _ d: Int) -> String {
+            d == 0 ? "N/A" : "\(Int(Double(n) / Double(d) * 100))%"
+        }
+
+        let summary = "Classes: \(testedClassCount)/\(totalClasses) (\(pct(testedClassCount, totalClasses))), " +
+            "Properties: \(testedPropCount)/\(totalProps) (\(pct(testedPropCount, totalProps))), " +
+            "Elements: \(testedElemCount)/\(totalElements) (\(pct(testedElemCount, totalElements)))"
+
+        findings.append(LintFinding(
+            .info, category: "dynamic-coverage",
+            message: summary
+        ))
+
+        // Flag untested top-level classes
+        let untestedClasses = visibleClasses.filter { !coverage.testedClasses.contains($0.name.lowercased()) }
+        if !untestedClasses.isEmpty {
+            let names = untestedClasses.map(\.name).sorted().joined(separator: ", ")
+            findings.append(LintFinding(
+                .info, category: "dynamic-coverage",
+                message: "Untested classes: \(names)"
             ))
         }
     }
@@ -459,6 +531,7 @@ struct DynamicTester {
             do {
                 _ = try sendGet(specifier, command: cmd)
                 successCount += 1
+                coverage.recordProperty("application", prop.name)
             } catch {
                 failCount += 1
                 findings.append(LintFinding(
@@ -468,6 +541,8 @@ struct DynamicTester {
                 ))
             }
         }
+
+        coverage.recordClass("application")
 
         findings.append(LintFinding(
             .info, category: "dynamic-property",
@@ -504,6 +579,8 @@ struct DynamicTester {
                     command: cmd
                 )
                 successCount += 1
+                coverage.recordElement("application", elem.type)
+                coverage.recordClass(elem.type)
                 findings.append(LintFinding(
                     .info, category: "dynamic-count",
                     message: "count of \(elemClass.pluralName ?? elemClass.name): \(count)"
@@ -580,6 +657,7 @@ struct DynamicTester {
                 do {
                     _ = try sendGet(propSpec, command: cmd)
                     propSuccess += 1
+                    coverage.recordProperty(elemClass.name, prop.name)
                 } catch {
                     propFail += 1
                     findings.append(LintFinding(
@@ -809,6 +887,8 @@ struct DynamicTester {
                     command: cmd
                 )
                 subElemSuccess += 1
+                coverage.recordElement(className, elem.type)
+                coverage.recordClass(elem.type)
             } catch {
                 subElemFail += 1
                 findings.append(LintFinding(

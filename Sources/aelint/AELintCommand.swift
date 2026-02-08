@@ -37,6 +37,12 @@ struct AELintCommand: ParsableCommand {
     @Flag(name: .long, help: "Output report as HTML")
     var html: Bool = false
 
+    @Option(name: .long, help: "Slow event threshold in seconds (default 1.0); events above this are flagged as warnings")
+    var slowThreshold: Double = 1.0
+
+    @Flag(name: .long, help: "Print SDEF dictionary summary and exit")
+    var summary: Bool = false
+
     func run() throws {
         // Load SDEF
         let dictionary: ScriptingDictionary
@@ -49,6 +55,12 @@ struct AELintCommand: ParsableCommand {
             dictionary = dict
         }
 
+        // Summary mode: print SDEF outline and exit
+        if summary {
+            printSDEFSummary(dictionary)
+            return
+        }
+
         // Run static validation
         let validator = SDEFValidator(dictionary: dictionary, appName: appName)
         var findings = validator.validate()
@@ -59,11 +71,22 @@ struct AELintCommand: ParsableCommand {
 
         // Dynamic tests
         var eventTimer: EventTimer? = nil
+        var coverageTracker: CoverageTracker? = nil
         if dynamic {
             let timer = EventTimer()
             eventTimer = timer
             let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log, timer: timer, timeout: timeout)
             findings.append(contentsOf: tester.runTests(pathFinder: pathFinder))
+            coverageTracker = tester.coverage
+
+            // Flag slow events above threshold
+            for event in timer.events where event.duration >= slowThreshold && !event.isTimeout {
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-slow",
+                    message: "Slow event (\(String(format: "%.3f", event.duration))s >= \(String(format: "%.1f", slowThreshold))s threshold)",
+                    context: event.command
+                ))
+            }
         }
 
         // Apply severity filter
@@ -72,11 +95,11 @@ struct AELintCommand: ParsableCommand {
 
         // Output report
         if json {
-            printJSONReport(filteredFindings, timer: eventTimer)
+            printJSONReport(filteredFindings, timer: eventTimer, coverage: coverageTracker)
         } else if html {
-            printHTMLReport(filteredFindings, dictionary: dictionary, timer: eventTimer)
+            printHTMLReport(filteredFindings, dictionary: dictionary, timer: eventTimer, coverage: coverageTracker)
         } else {
-            printTextReport(filteredFindings, dictionary: dictionary, timer: eventTimer)
+            printTextReport(filteredFindings, dictionary: dictionary, timer: eventTimer, coverage: coverageTracker)
         }
 
         // Exit with failure if any errors found
@@ -85,7 +108,7 @@ struct AELintCommand: ParsableCommand {
         }
     }
 
-    private func printTextReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil) {
+    private func printTextReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil, coverage: CoverageTracker? = nil) {
         let errors = findings.filter { $0.severity == .error }
         let warnings = findings.filter { $0.severity == .warning }
         let info = findings.filter { $0.severity == .info }
@@ -123,6 +146,9 @@ struct AELintCommand: ParsableCommand {
             if let timer = timer {
                 printTimingReport(timer)
             }
+            if let coverage = coverage {
+                printCoverageReport(coverage)
+            }
         }
 
         // Quality score
@@ -159,6 +185,8 @@ struct AELintCommand: ParsableCommand {
             ("dynamic-ordinal", "Ordinal access"),
             ("dynamic-cmd", "Command testing"),
             ("dynamic-timing", "Timing"),
+            ("dynamic-slow", "Slow events"),
+            ("dynamic-coverage", "Test coverage"),
         ]
 
         for (prefix, label) in categories {
@@ -168,8 +196,8 @@ struct AELintCommand: ParsableCommand {
             let hasWarnings = catFindings.contains { $0.severity == .warning }
             let hasErrors = catFindings.contains { $0.severity == .error }
             let symbol = hasErrors ? "X" : (hasWarnings ? "!" : ".")
-            // Find the summary finding (first info for timing, last info for others)
-            if let summary = prefix == "dynamic-timing"
+            // Find the summary finding (first info for timing/coverage, last info for others)
+            if let summary = (prefix == "dynamic-timing" || prefix == "dynamic-coverage")
                 ? catFindings.first(where: { $0.severity == .info })
                 : catFindings.last(where: { $0.severity == .info }) {
                 // Strip redundant label prefix from message (e.g. "Set property: 23 writable..." → "23 writable...")
@@ -221,6 +249,16 @@ struct AELintCommand: ParsableCommand {
         print()
     }
 
+    private func printCoverageReport(_ coverage: CoverageTracker) {
+        print(String(repeating: "=", count: 40))
+        print("Test Coverage")
+        print(String(repeating: "-", count: 40))
+        print("  Classes tested: \(coverage.testedClasses.count)")
+        print("  Properties tested: \(coverage.testedProperties.count)")
+        print("  Elements tested: \(coverage.testedElements.count)")
+        print()
+    }
+
     private func computeQualityScore(_ findings: [LintFinding]) -> (score: Int, grade: String) {
         let errors = findings.filter { $0.severity == .error }.count
         let warnings = findings.filter { $0.severity == .warning }.count
@@ -251,7 +289,7 @@ struct AELintCommand: ParsableCommand {
         print(String(repeating: "=", count: 40))
     }
 
-    private func printJSONReport(_ findings: [LintFinding], timer: EventTimer? = nil) {
+    private func printJSONReport(_ findings: [LintFinding], timer: EventTimer? = nil, coverage: CoverageTracker? = nil) {
         var report: [String: Any] = [:]
 
         let items: [[String: String]] = findings.map { finding in
@@ -290,6 +328,14 @@ struct AELintCommand: ParsableCommand {
             report["timing"] = timing
         }
 
+        if let coverage = coverage {
+            report["coverage"] = [
+                "classesTestedCount": coverage.testedClasses.count,
+                "propertiesTestedCount": coverage.testedProperties.count,
+                "elementsTestedCount": coverage.testedElements.count,
+            ] as [String: Any]
+        }
+
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
            let str = String(data: data, encoding: .utf8) {
             print(str)
@@ -316,7 +362,7 @@ struct AELintCommand: ParsableCommand {
 
     // MARK: - HTML report
 
-    private func printHTMLReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil) {
+    private func printHTMLReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil, coverage: CoverageTracker? = nil) {
         let errors = findings.filter { $0.severity == .error }
         let warnings = findings.filter { $0.severity == .warning }
         let info = findings.filter { $0.severity == .info }
@@ -455,11 +501,107 @@ struct AELintCommand: ParsableCommand {
             h += "</table>\n"
         }
 
+        // Coverage
+        if let coverage = coverage {
+            h += "<h2>Test Coverage</h2>\n"
+            h += "<table>\n<tr><th>Metric</th><th>Count</th></tr>\n"
+            h += "<tr><td>Classes tested</td><td>\(coverage.testedClasses.count)</td></tr>\n"
+            h += "<tr><td>Properties tested</td><td>\(coverage.testedProperties.count)</td></tr>\n"
+            h += "<tr><td>Elements tested</td><td>\(coverage.testedElements.count)</td></tr>\n"
+            h += "</table>\n"
+        }
+
         // Footer
         h += "<footer>Generated by aelint \(AELintCommand.configuration.version)</footer>\n"
         h += "</body>\n</html>\n"
 
         print(h)
+    }
+
+    // MARK: - SDEF Summary
+
+    private func printSDEFSummary(_ dictionary: ScriptingDictionary) {
+        print("SDEF Summary for \(appName)")
+        print(String(repeating: "=", count: 50))
+
+        // Suites
+        if !dictionary.suiteNames.isEmpty {
+            print("\nSuites: \(dictionary.suiteNames.joined(separator: ", "))")
+        }
+
+        // Classes
+        let sortedClasses = dictionary.classes.values.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        print("\nClasses (\(sortedClasses.count)):")
+        print(String(repeating: "-", count: 50))
+        for cls in sortedClasses {
+            let hiddenTag = cls.hidden ? " [hidden]" : ""
+            let inheritsTag = cls.inherits.map { " : \($0)" } ?? ""
+            let plural = cls.pluralName.map { " (plural: \($0))" } ?? ""
+            print("  \(cls.name) [\(cls.code)]\(inheritsTag)\(plural)\(hiddenTag)")
+
+            if let desc = cls.description {
+                print("    \(desc)")
+            }
+
+            let props = dictionary.allProperties(for: cls).filter { !$0.hidden }
+            if !props.isEmpty {
+                for prop in props {
+                    let typeStr = prop.type.map { ": \($0)" } ?? ""
+                    let accessStr = prop.access.map { " (\($0.rawValue))" } ?? ""
+                    print("    . \(prop.name)\(typeStr)\(accessStr)")
+                }
+            }
+
+            let elems = dictionary.allElements(for: cls).filter { !$0.hidden }
+            if !elems.isEmpty {
+                let elemNames = elems.map(\.type).joined(separator: ", ")
+                print("    > elements: \(elemNames)")
+            }
+        }
+
+        // Commands
+        let sortedCommands = dictionary.commands.values.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        print("\nCommands (\(sortedCommands.count)):")
+        print(String(repeating: "-", count: 50))
+        for cmd in sortedCommands {
+            let hiddenTag = cmd.hidden ? " [hidden]" : ""
+            let suiteTag = cmd.suiteName.map { " (\($0))" } ?? ""
+            print("  \(cmd.name) [\(cmd.code)]\(suiteTag)\(hiddenTag)")
+
+            if let desc = cmd.description {
+                print("    \(desc)")
+            }
+
+            if let dp = cmd.directParameter {
+                let typeStr = dp.type ?? "any"
+                let optStr = dp.optional ? " (optional)" : ""
+                print("    direct: \(typeStr)\(optStr)")
+            }
+
+            for param in cmd.parameters {
+                let nameStr = param.name ?? "?"
+                let typeStr = param.type ?? "any"
+                let optStr = param.optional ? " (optional)" : ""
+                print("    \(nameStr): \(typeStr)\(optStr)")
+            }
+
+            if let result = cmd.result {
+                let typeStr = result.type ?? "any"
+                print("    -> \(typeStr)")
+            }
+        }
+
+        // Enumerations
+        let sortedEnums = dictionary.enumerations.values.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        print("\nEnumerations (\(sortedEnums.count)):")
+        print(String(repeating: "-", count: 50))
+        for enumDef in sortedEnums {
+            let codeTag = enumDef.code.map { " [\($0)]" } ?? ""
+            print("  \(enumDef.name)\(codeTag)")
+            for e in enumDef.enumerators {
+                print("    \(e.name) [\(e.code)]")
+            }
+        }
     }
 
     private func escapeHTML(_ str: String) -> String {
