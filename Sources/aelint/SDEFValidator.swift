@@ -265,15 +265,71 @@ struct SDEFValidator {
         }
 
         for cls in dictionary.classes.values {
-            if usedAsElement.contains(cls.name.lowercased()) && cls.pluralName == nil {
+            guard usedAsElement.contains(cls.name.lowercased()) && cls.pluralName == nil else { continue }
+
+            // SDEF defaults to appending "s" when no plural is specified.
+            // Only warn when that naive default would produce incorrect English.
+            let name = cls.name.lowercased()
+            if naiveAppendSIsCorrect(name) {
+                findings.append(LintFinding(
+                    .info, category: "missing-plural",
+                    message: "Class '\(cls.name)' has no explicit plural (defaults to '\(cls.name)s')"
+                ))
+            } else {
                 findings.append(LintFinding(
                     .warning, category: "missing-plural",
-                    message: "Class '\(cls.name)' is used as an element but has no plural name"
+                    message: "Class '\(cls.name)' is used as an element but has no plural name; default '\(cls.name)s' is likely incorrect"
                 ))
             }
         }
 
         return findings
+    }
+
+    /// Check whether simply appending "s" to a name produces a reasonable English plural.
+    /// Returns false for names where the naive rule would be wrong.
+    private func naiveAppendSIsCorrect(_ name: String) -> Bool {
+        // Only check the last word for multi-word names (e.g. "settings set" → check "set")
+        let lastWord = name.components(separatedBy: " ").last ?? name
+
+        // Irregular nouns where appending "s" is wrong
+        let irregulars: Set<String> = [
+            "child", "person", "man", "woman", "mouse", "goose",
+            "foot", "tooth", "ox", "die", "index", "matrix",
+            "vertex", "axis", "crisis", "thesis", "datum", "medium",
+            "criterion", "phenomenon", "stimulus", "focus", "cactus",
+            "radius", "fungus", "nucleus", "syllabus", "analysis",
+            "basis", "diagnosis", "synopsis",
+        ]
+        if irregulars.contains(lastWord) { return false }
+
+        // Words ending in s, x, z, ch, sh need "es" not just "s"
+        if lastWord.hasSuffix("s") || lastWord.hasSuffix("x") || lastWord.hasSuffix("z")
+            || lastWord.hasSuffix("ch") || lastWord.hasSuffix("sh") {
+            return false
+        }
+
+        // Words ending in consonant + "y" need "ies" (e.g. "reply" → "replies")
+        // But vowel + "y" is fine (e.g. "key" → "keys", "day" → "days")
+        if lastWord.hasSuffix("y") && lastWord.count >= 2 {
+            let vowels: Set<Character> = ["a", "e", "i", "o", "u"]
+            let beforeY = lastWord[lastWord.index(lastWord.endIndex, offsetBy: -2)]
+            if !vowels.contains(beforeY) {
+                return false
+            }
+        }
+
+        // Words ending in "f" or "fe" often need "ves" (e.g. "leaf" → "leaves")
+        if lastWord.hasSuffix("fe") || (lastWord.hasSuffix("f") && !lastWord.hasSuffix("ff")) {
+            return false
+        }
+
+        // Words ending in "o" preceded by a consonant often need "es"
+        // (e.g. "hero" → "heroes") but many exceptions exist (photo, piano)
+        // Too ambiguous to flag — let it pass
+
+        // Default: appending "s" is likely correct
+        return true
     }
 
     // MARK: - Non-standard terms for well-known codes
