@@ -144,7 +144,7 @@ public struct SDEFParser {
             guard let propElement = node as? XMLElement,
                   let name = propElement.attribute(forName: "name")?.stringValue,
                   let code = propElement.attribute(forName: "code")?.stringValue else { continue }
-            let type = propElement.attribute(forName: "type")?.stringValue
+            let type = resolveType(from: propElement)
             let accessStr = propElement.attribute(forName: "access")?.stringValue
             let access = accessStr.flatMap { PropertyAccess(rawValue: $0) }
             let hidden = propElement.attribute(forName: "hidden")?.stringValue == "yes"
@@ -163,6 +163,28 @@ public struct SDEFParser {
             elems.append(ElementDef(type: type, access: access, hidden: hidden))
         }
         return elems
+    }
+
+    /// Resolve the type for a property, parameter, or result element.
+    /// Checks the `type` attribute first, then falls back to nested `<type>` child elements.
+    private func resolveType(from element: XMLElement) -> String? {
+        // Prefer the inline type attribute
+        if let type = element.attribute(forName: "type")?.stringValue {
+            return type
+        }
+        // Fall back to nested <type> child elements
+        guard let typeNodes = try? element.nodes(forXPath: "type"),
+              !typeNodes.isEmpty else { return nil }
+        var types: [String] = []
+        for node in typeNodes {
+            guard let typeElement = node as? XMLElement,
+                  typeElement.attribute(forName: "hidden")?.stringValue != "yes",
+                  let typeName = typeElement.attribute(forName: "type")?.stringValue,
+                  typeName != "missing value" else { continue }
+            let isList = typeElement.attribute(forName: "list")?.stringValue == "yes"
+            types.append(isList ? "list of \(typeName)" : typeName)
+        }
+        return types.isEmpty ? nil : types.joined(separator: " / ")
     }
 
     private func parseEnumeration(_ element: XMLElement) -> EnumDef {
