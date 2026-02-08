@@ -61,9 +61,36 @@ public struct ScriptingDictionary {
         return nil
     }
 
-    /// Check if a name is a known plural form
+    /// Check if a name is a known plural form (explicit or default)
     public func isPlural(_ name: String) -> Bool {
-        pluralToSingular[name.lowercased()] != nil
+        let lower = name.lowercased()
+        if pluralToSingular[lower] != nil { return true }
+        // Check default pluralization: if removing trailing "s" yields a known class
+        if lower.hasSuffix("s") {
+            let singular = String(lower.dropLast())
+            if classes[singular] != nil { return true }
+        }
+        return false
+    }
+
+    /// Compute the default plural for a class name (AppleScript's heuristic: append "s")
+    public func defaultPlural(for className: String) -> String {
+        if let cls = classes[className.lowercased()], let plural = cls.pluralName {
+            return plural
+        }
+        return className + "s"
+    }
+
+    /// Find a class by its default plural form (name + "s") when no explicit plural is defined
+    public func findClassByDefaultPlural(_ plural: String) -> ClassDef? {
+        let lower = plural.lowercased()
+        guard lower.hasSuffix("s") else { return nil }
+        let singular = String(lower.dropLast())
+        // Only match if the class exists AND has no explicit plural (otherwise findClassByPlural handles it)
+        if let cls = classes[singular], cls.pluralName == nil {
+            return cls
+        }
+        return nil
     }
 
     /// Get the full set of properties for a class, including inherited ones
