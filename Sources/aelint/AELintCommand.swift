@@ -49,16 +49,19 @@ struct AELintCommand: ParsableCommand {
         findings.append(contentsOf: validator.validateReachability(pathFinder: pathFinder, maxDepth: maxDepth))
 
         // Dynamic tests
+        var eventTimer: EventTimer? = nil
         if dynamic {
-            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log)
+            let timer = EventTimer()
+            eventTimer = timer
+            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log, timer: timer)
             findings.append(contentsOf: tester.runTests(pathFinder: pathFinder))
         }
 
         // Output report
         if json {
-            printJSONReport(findings)
+            printJSONReport(findings, timer: eventTimer)
         } else {
-            printTextReport(findings, dictionary: dictionary)
+            printTextReport(findings, dictionary: dictionary, timer: eventTimer)
         }
 
         // Exit with failure if any errors found
@@ -67,7 +70,7 @@ struct AELintCommand: ParsableCommand {
         }
     }
 
-    private func printTextReport(_ findings: [LintFinding], dictionary: ScriptingDictionary) {
+    private func printTextReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil) {
         let errors = findings.filter { $0.severity == .error }
         let warnings = findings.filter { $0.severity == .warning }
         let info = findings.filter { $0.severity == .info }
@@ -102,6 +105,9 @@ struct AELintCommand: ParsableCommand {
         // Dynamic test summary
         if dynamic {
             printDynamicSummary(findings)
+            if let timer = timer {
+                printTimingReport(timer)
+            }
         }
     }
 
@@ -130,6 +136,7 @@ struct AELintCommand: ParsableCommand {
             ("dynamic-error", "Error handling"),
             ("dynamic-set", "Set property"),
             ("dynamic-pall", "Properties record"),
+            ("dynamic-timing", "Timing"),
         ]
 
         for (prefix, label) in categories {
@@ -139,8 +146,10 @@ struct AELintCommand: ParsableCommand {
             let hasWarnings = catFindings.contains { $0.severity == .warning }
             let hasErrors = catFindings.contains { $0.severity == .error }
             let symbol = hasErrors ? "X" : (hasWarnings ? "!" : ".")
-            // Find the summary finding (usually last info in the category)
-            if let summary = catFindings.last(where: { $0.severity == .info }) {
+            // Find the summary finding (first info for timing, last info for others)
+            if let summary = prefix == "dynamic-timing"
+                ? catFindings.first(where: { $0.severity == .info })
+                : catFindings.last(where: { $0.severity == .info }) {
                 // Strip redundant label prefix from message (e.g. "Set property: 23 writable..." → "23 writable...")
                 let msg = stripLabelPrefix(summary.message, label: label)
                 print("  \(symbol) \(label): \(msg)")
@@ -165,7 +174,34 @@ struct AELintCommand: ParsableCommand {
         return message
     }
 
-    private func printJSONReport(_ findings: [LintFinding]) {
+    private func printTimingReport(_ timer: EventTimer) {
+        let events = timer.events
+        guard !events.isEmpty else { return }
+
+        print(String(repeating: "=", count: 40))
+        print("Event Timing")
+        print(String(repeating: "-", count: 40))
+
+        let total = timer.totalDuration
+        let avg = total / Double(events.count)
+        print("  Events: \(events.count), Total: \(String(format: "%.1f", total))s, Avg: \(String(format: "%.3f", avg))s")
+        if timer.timeoutCount > 0 {
+            print("  Timeouts: \(timer.timeoutCount)")
+        }
+        print()
+
+        let slowest = timer.slowestEvents.prefix(10)
+        print("  Slowest events:")
+        for (i, event) in slowest.enumerated() {
+            let marker = event.isTimeout ? " TIMEOUT" : ""
+            print("    \(i + 1). \(String(format: "%.3f", event.duration))s\(marker) — \(event.command)")
+        }
+        print()
+    }
+
+    private func printJSONReport(_ findings: [LintFinding], timer: EventTimer? = nil) {
+        var report: [String: Any] = [:]
+
         let items: [[String: String]] = findings.map { finding in
             var dict: [String: String] = [
                 "severity": finding.severity.rawValue,
@@ -177,7 +213,29 @@ struct AELintCommand: ParsableCommand {
             }
             return dict
         }
-        if let data = try? JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys]),
+        report["findings"] = items
+
+        if let timer = timer {
+            var timing: [String: Any] = [
+                "eventCount": timer.events.count,
+                "totalSeconds": Double(String(format: "%.3f", timer.totalDuration))!,
+                "timeoutCount": timer.timeoutCount,
+            ]
+            if !timer.events.isEmpty {
+                timing["averageSeconds"] = Double(String(format: "%.3f", timer.totalDuration / Double(timer.events.count)))!
+            }
+            let slowest: [[String: Any]] = timer.slowestEvents.prefix(10).map { event in
+                [
+                    "command": event.command,
+                    "seconds": Double(String(format: "%.3f", event.duration))!,
+                    "timeout": event.isTimeout,
+                ]
+            }
+            timing["slowest"] = slowest
+            report["timing"] = timing
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
            let str = String(data: data, encoding: .utf8) {
             print(str)
         }

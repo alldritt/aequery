@@ -1,26 +1,93 @@
 import AEQueryLib
 import Foundation
 
+/// Collects timing data for all Apple Events sent during dynamic testing.
+class EventTimer {
+    struct TimedEvent {
+        let command: String
+        let duration: TimeInterval
+        let isTimeout: Bool
+    }
+
+    private(set) var events: [TimedEvent] = []
+
+    func record(command: String, duration: TimeInterval, isTimeout: Bool = false) {
+        events.append(TimedEvent(command: command, duration: duration, isTimeout: isTimeout))
+    }
+
+    var totalDuration: TimeInterval {
+        events.reduce(0) { $0 + $1.duration }
+    }
+
+    var slowestEvents: [TimedEvent] {
+        events.sorted { $0.duration > $1.duration }
+    }
+
+    var timeoutCount: Int {
+        events.filter(\.isTimeout).count
+    }
+}
+
 struct DynamicTester {
     let dictionary: ScriptingDictionary
     let appName: String
     let maxDepth: Int
     let log: Bool
+    let timer: EventTimer
 
     private let sender = AppleEventSender()
     private let builder: ObjectSpecifierBuilder
 
-    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int, log: Bool = false) {
+    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int, log: Bool = false, timer: EventTimer = EventTimer()) {
         self.dictionary = dictionary
         self.appName = appName
         self.maxDepth = maxDepth
         self.log = log
+        self.timer = timer
         self.builder = ObjectSpecifierBuilder(dictionary: dictionary)
     }
 
-    // MARK: - Apple Event wrappers with logging
+    // MARK: - Apple Event wrappers with logging and timing
 
     private var appRef: String { "application \"\(appName)\"" }
+
+    /// Check if an error is a timeout (-1712)
+    private func isTimeout(_ error: Error) -> Bool {
+        if let aeError = error as? AEQueryError,
+           case .appleEventFailed(let code, _, _) = aeError {
+            return code == -1712
+        }
+        return false
+    }
+
+    /// After a timeout, poll the app until it becomes responsive again.
+    /// Returns true if the app recovered, false if it never came back.
+    private func waitForRecovery() -> Bool {
+        let nameSpec = builder.buildPropertySpecifier(
+            code: "pnam",
+            container: NSAppleEventDescriptor.null()
+        )
+
+        logStderr("  !! Timeout detected — waiting for \(appName) to become responsive...")
+
+        for attempt in 1...30 {
+            // Wait 1 second between retries
+            Thread.sleep(forTimeInterval: 1.0)
+
+            do {
+                _ = try sender.sendGetEvent(to: appName, specifier: nameSpec, timeoutSeconds: 5)
+                logStderr("  !! \(appName) recovered after \(attempt)s")
+                return true
+            } catch {
+                if attempt % 5 == 0 {
+                    logStderr("  !! Still waiting... (\(attempt)s)")
+                }
+            }
+        }
+
+        logStderr("  !! \(appName) did not recover after 30s — aborting remaining tests")
+        return false
+    }
 
     @discardableResult
     private func sendGet(
@@ -28,12 +95,18 @@ struct DynamicTester {
         command: String
     ) throws -> NSAppleEventDescriptor {
         logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
         do {
             let result = try sender.sendGetEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
-            logResult(describeResult(result))
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult(describeResult(result), elapsed: elapsed)
             return result
         } catch {
-            logResult("ERROR: \(error.localizedDescription)")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
             throw error
         }
     }
@@ -44,14 +117,20 @@ struct DynamicTester {
         command: String
     ) throws -> Int {
         logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
         do {
             let count = try sender.sendCountEvent(
                 to: appName, container: container, elementCode: elementCode, timeoutSeconds: 10
             )
-            logResult("\(count)")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult("\(count)", elapsed: elapsed)
             return count
         } catch {
-            logResult("ERROR: \(error.localizedDescription)")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
             throw error
         }
     }
@@ -61,12 +140,18 @@ struct DynamicTester {
         command: String
     ) throws -> Bool {
         logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
         do {
             let exists = try sender.sendExistsEvent(to: appName, specifier: specifier, timeoutSeconds: 10)
-            logResult("\(exists)")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult("\(exists)", elapsed: elapsed)
             return exists
         } catch {
-            logResult("ERROR: \(error.localizedDescription)")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
             throw error
         }
     }
@@ -77,11 +162,17 @@ struct DynamicTester {
         command: String
     ) throws {
         logEvent(command)
+        let start = CFAbsoluteTimeGetCurrent()
         do {
             try sender.sendSetEvent(to: appName, specifier: specifier, value: value, timeoutSeconds: 10)
-            logResult("ok")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            timer.record(command: command, duration: elapsed)
+            logResult("ok", elapsed: elapsed)
         } catch {
-            logResult("ERROR: \(error.localizedDescription)")
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let timedOut = isTimeout(error)
+            timer.record(command: command, duration: elapsed, isTimeout: timedOut)
+            logResult("ERROR: \(error.localizedDescription)", elapsed: elapsed)
             throw error
         }
     }
@@ -91,9 +182,13 @@ struct DynamicTester {
         FileHandle.standardError.write(Data("  \u{2192} \(command)\n".utf8))
     }
 
-    private func logResult(_ result: String) {
+    private func logResult(_ result: String, elapsed: TimeInterval) {
         guard log else { return }
-        FileHandle.standardError.write(Data("  \u{2190} \(result)\n".utf8))
+        FileHandle.standardError.write(Data("  \u{2190} \(result) (\(String(format: "%.3f", elapsed))s)\n".utf8))
+    }
+
+    private func logStderr(_ message: String) {
+        FileHandle.standardError.write(Data("\(message)\n".utf8))
     }
 
     private func describeResult(_ desc: NSAppleEventDescriptor) -> String {
@@ -135,58 +230,96 @@ struct DynamicTester {
 
     func runTests(pathFinder: SDEFPathFinder) -> [LintFinding] {
         var findings: [LintFinding] = []
+        var aborted = false
 
         // Verify the app is running and reachable
         guard verifyAppReachable(&findings) else {
             return findings
         }
 
-        // Test 1: Get all application properties
-        findings.append(contentsOf: testApplicationProperties())
+        let phases: [(String, () -> [LintFinding])] = [
+            ("Application properties", testApplicationProperties),
+            ("Element counting", testApplicationElements),
+            ("Element properties", testFirstElementProperties),
+            ("Access forms", testAccessForms),
+            ("Sub-element exploration", testSubElements),
+            ("Every-element retrieval", testEveryElementRetrieval),
+            ("Whose clause filtering", testWhoseClause),
+            ("Exists event", testExistsEvent),
+            ("Type validation", testTypeValidation),
+            ("Range access", testRangeAccess),
+            ("Inherited properties", testInheritedProperties),
+            ("Error handling", testErrorHandling),
+            ("Set property", testSetProperty),
+            ("Properties record", testPropertiesRecord),
+            ("Whose clause operators", testWhoseOperators),
+        ]
 
-        // Test 2: Count direct elements of application
-        findings.append(contentsOf: testApplicationElements())
+        for (name, phase) in phases {
+            let prevTimeouts = timer.timeoutCount
+            let phaseFindings = phase()
+            findings.append(contentsOf: phaseFindings)
 
-        // Test 3: For elements with count > 0, test getting properties of first element
-        findings.append(contentsOf: testFirstElementProperties())
+            // Check if any new timeouts occurred during this phase
+            let newTimeouts = timer.timeoutCount - prevTimeouts
+            if newTimeouts > 0 {
+                findings.append(LintFinding(
+                    .error, category: "dynamic-timeout",
+                    message: "Timeout during '\(name)' — \(newTimeouts) event(s) timed out"
+                ))
 
-        // Test 4: Test access forms (by index, by name) on elements
-        findings.append(contentsOf: testAccessForms())
+                // Try to recover before continuing
+                if !waitForRecovery() {
+                    findings.append(LintFinding(
+                        .error, category: "dynamic-timeout",
+                        message: "Application did not recover after timeout — aborting remaining tests"
+                    ))
+                    aborted = true
+                    break
+                }
+            }
+        }
 
-        // Test 5: Recursive sub-element exploration
-        findings.append(contentsOf: testSubElements())
-
-        // Test 6: Test every-element retrieval
-        findings.append(contentsOf: testEveryElementRetrieval())
-
-        // Test 7: Test whose clause filtering
-        findings.append(contentsOf: testWhoseClause())
-
-        // Test 8: Test exists event
-        findings.append(contentsOf: testExistsEvent())
-
-        // Test 9: Validate property return types against SDEF declarations
-        findings.append(contentsOf: testTypeValidation())
-
-        // Test 10: Range access (items 1 thru N)
-        findings.append(contentsOf: testRangeAccess())
-
-        // Test 11: Inherited properties
-        findings.append(contentsOf: testInheritedProperties())
-
-        // Test 12: Error handling for invalid references
-        findings.append(contentsOf: testErrorHandling())
-
-        // Test 13: Set property (read-write)
-        findings.append(contentsOf: testSetProperty())
-
-        // Test 14: Properties record (pALL)
-        findings.append(contentsOf: testPropertiesRecord())
-
-        // Test 15: Whose clause operators (contains, begins with, ends with)
-        findings.append(contentsOf: testWhoseOperators())
+        // Add timing summary findings
+        appendTimingFindings(&findings, aborted: aborted)
 
         return findings
+    }
+
+    /// Append timing statistics and slowest events as findings.
+    private func appendTimingFindings(_ findings: inout [LintFinding], aborted: Bool) {
+        let events = timer.events
+        guard !events.isEmpty else { return }
+
+        let total = timer.totalDuration
+        let avg = total / Double(events.count)
+        let timeouts = timer.timeoutCount
+
+        var summary = "\(events.count) events in \(String(format: "%.1f", total))s"
+        summary += " (avg \(String(format: "%.3f", avg))s)"
+        if timeouts > 0 {
+            summary += ", \(timeouts) timeout(s)"
+        }
+        if aborted {
+            summary += " [ABORTED]"
+        }
+
+        findings.append(LintFinding(
+            .info, category: "dynamic-timing",
+            message: summary
+        ))
+
+        // Report slowest events (top 10)
+        let slowest = timer.slowestEvents.prefix(10)
+        for (i, event) in slowest.enumerated() {
+            let marker = event.isTimeout ? " TIMEOUT" : ""
+            findings.append(LintFinding(
+                event.isTimeout ? .error : .info,
+                category: "dynamic-timing",
+                message: "Slow #\(i + 1): \(String(format: "%.3f", event.duration))s\(marker)",
+                context: event.command
+            ))
+        }
     }
 
     // MARK: - App reachability
