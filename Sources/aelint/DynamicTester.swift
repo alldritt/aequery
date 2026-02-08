@@ -356,6 +356,9 @@ struct DynamicTester {
             ("Make/delete round-trip", testMakeDeleteRoundTrip),
             ("Ordinal access", testOrdinalAccess),
             ("Command testing", testCommandInvocation),
+            ("Batch property retrieval", testBatchPropertyRetrieval),
+            ("Set round-trip", testSetRoundTrip),
+            ("Enumeration values", testEnumerationValues),
         ]
 
         for (i, (name, phase)) in phases.enumerated() {
@@ -2654,5 +2657,311 @@ struct DynamicTester {
         }
 
         return findings
+    }
+
+    // MARK: - Phase 20: Batch property retrieval
+
+    /// Test `get <property> of every <element>` patterns.
+    /// Verifies that bulk property retrieval returns a list with the expected count.
+    private func testBatchPropertyRetrieval() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        var successCount = 0
+        var failCount = 0
+
+        let allElems = dictionary.allElements(for: appClass)
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            // Find a readable property (prefer "name", fall back to first readable)
+            let allProps = dictionary.allProperties(for: elemClass)
+            let readableProps = allProps.filter { !$0.hidden && $0.access != .writeOnly }
+            guard let testProp = readableProps.first(where: { $0.name.lowercased() == "name" }) ?? readableProps.first else { continue }
+
+            // Build: get <property> of every <element>
+            let everySpec = builder.buildEveryElement(
+                code: elemClass.code,
+                container: NSAppleEventDescriptor.null()
+            )
+            let propSpec = builder.buildPropertySpecifier(
+                code: testProp.code,
+                container: everySpec
+            )
+            let cmd = "get \(testProp.name) of every \(elemClass.name) of \(appRef)"
+
+            do {
+                let result = try sendGet(propSpec, command: cmd)
+                let resultCount: Int
+                if result.descriptorType == AEConstants.typeAEList {
+                    resultCount = result.numberOfItems
+                } else {
+                    resultCount = 1
+                }
+                successCount += 1
+
+                if resultCount != count {
+                    findings.append(LintFinding(
+                        .warning, category: "dynamic-batch",
+                        message: "\(testProp.name) of every \(elemClass.name): expected \(count) values, got \(resultCount)",
+                        context: cmd
+                    ))
+                }
+            } catch {
+                failCount += 1
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-batch",
+                    message: "Cannot get \(testProp.name) of every \(elemClass.name): \(error.localizedDescription)",
+                    context: cmd
+                ))
+            }
+        }
+
+        findings.append(LintFinding(
+            .info, category: "dynamic-batch",
+            message: "Batch property retrieval: \(successCount) succeeded, \(failCount) failed"
+        ))
+
+        return findings
+    }
+
+    // MARK: - Phase 21: Set-read-restore round-trip
+
+    /// Test that setting a property actually changes the value, then restore the original.
+    /// Only tests safe, non-destructive properties (names, boolean toggles, etc.).
+    private func testSetRoundTrip() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        var verifiedCount = 0
+        var mismatchCount = 0
+
+        // Safe boolean properties to toggle on element types
+        let safeBooleanCodes: Set<String> = [
+            "pvis",   // visible
+            "iMnz",   // miniaturized
+            "pzum",   // zoomed
+        ]
+
+        let allElems = dictionary.allElements(for: appClass)
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+            let elemPath = "\(elemClass.name) 1 of \(appRef)"
+
+            // Find safe boolean properties to test
+            let allProps = dictionary.allProperties(for: elemClass)
+            for prop in allProps {
+                if prop.hidden { continue }
+                if prop.access == .readOnly || prop.access == .writeOnly { continue }
+                guard safeBooleanCodes.contains(prop.code) else { continue }
+                guard prop.type?.lowercased() == "boolean" else { continue }
+
+                let propSpec = builder.buildPropertySpecifier(code: prop.code, container: firstSpec)
+                let getCmd = "get \(prop.name) of \(elemPath)"
+
+                // Read current value
+                let originalValue: NSAppleEventDescriptor
+                do {
+                    originalValue = try sendGet(propSpec, command: getCmd)
+                } catch {
+                    continue
+                }
+
+                let origBool = originalValue.booleanValue
+                let newBool = !origBool
+                let newValue = NSAppleEventDescriptor(boolean: newBool)
+                let setCmd = "set \(prop.name) of \(elemPath) to \"\(newBool)\""
+
+                do {
+                    // Set new value
+                    try sendSet(propSpec, value: newValue, command: setCmd)
+
+                    // Read back
+                    let readBack = try sendGet(propSpec, command: "get \(prop.name) of \(elemPath)")
+                    let readBool = readBack.booleanValue
+
+                    if readBool == newBool {
+                        verifiedCount += 1
+                    } else {
+                        mismatchCount += 1
+                        findings.append(LintFinding(
+                            .warning, category: "dynamic-roundtrip",
+                            message: "Set '\(prop.name)' of \(elemClass.name) to \(newBool) but read back \(readBool)",
+                            context: setCmd
+                        ))
+                    }
+
+                    // Restore original
+                    try sendSet(propSpec, value: originalValue, command: "set \(prop.name) of \(elemPath) to \"\(origBool)\"")
+                } catch {
+                    // If set fails, that's fine — just means the property isn't truly writable
+                    continue
+                }
+            }
+        }
+
+        findings.append(LintFinding(
+            .info, category: "dynamic-roundtrip",
+            message: "Set round-trip: \(verifiedCount) verified, \(mismatchCount) mismatched"
+        ))
+
+        return findings
+    }
+
+    // MARK: - Phase 22: Enumeration value validation
+
+    /// For properties typed as enumerations, verify the returned value is one of the declared enumerators.
+    private func testEnumerationValues() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        guard let appClass = dictionary.findClass("application") else { return findings }
+
+        var validCount = 0
+        var invalidCount = 0
+        var checkedClasses: [String] = ["application"]
+
+        // Check application-level enum properties
+        checkEnumProperties(
+            classDef: appClass,
+            container: NSAppleEventDescriptor.null(),
+            containerPath: appRef,
+            validCount: &validCount,
+            invalidCount: &invalidCount,
+            findings: &findings
+        )
+
+        // Check element-level enum properties
+        let allElems = dictionary.allElements(for: appClass)
+        for elem in allElems {
+            if elem.hidden { continue }
+            guard let elemClass = dictionary.findClass(elem.type) else { continue }
+            if elemClass.hidden { continue }
+            if checkedClasses.contains(elemClass.name.lowercased()) { continue }
+            checkedClasses.append(elemClass.name.lowercased())
+
+            let elementCode = FourCharCode(elemClass.code)
+            let count: Int
+            do {
+                count = try sendCount(
+                    container: NSAppleEventDescriptor.null(),
+                    elementCode: elementCode,
+                    command: "count every \(elemClass.name) of \(appRef)"
+                )
+            } catch {
+                continue
+            }
+            guard count > 0 else { continue }
+
+            let firstSpec = builder.buildElementWithPredicate(
+                code: elemClass.code,
+                predicate: .byIndex(1),
+                container: NSAppleEventDescriptor.null()
+            )
+
+            checkEnumProperties(
+                classDef: elemClass,
+                container: firstSpec,
+                containerPath: "\(elemClass.name) 1 of \(appRef)",
+                validCount: &validCount,
+                invalidCount: &invalidCount,
+                findings: &findings
+            )
+        }
+
+        if validCount > 0 || invalidCount > 0 {
+            findings.append(LintFinding(
+                .info, category: "dynamic-enum",
+                message: "Enumeration values: \(validCount) valid, \(invalidCount) invalid"
+            ))
+        }
+
+        return findings
+    }
+
+    private func checkEnumProperties(
+        classDef: ClassDef,
+        container: NSAppleEventDescriptor,
+        containerPath: String,
+        validCount: inout Int,
+        invalidCount: inout Int,
+        findings: inout [LintFinding]
+    ) {
+        let allProps = dictionary.allProperties(for: classDef)
+
+        for prop in allProps {
+            if prop.hidden { continue }
+            if prop.access == .writeOnly { continue }
+            guard let typeName = prop.type else { continue }
+
+            // Check if the type is a known enumeration
+            guard let enumDef = dictionary.findEnumeration(typeName) else { continue }
+            guard !enumDef.enumerators.isEmpty else { continue }
+
+            let propSpec = builder.buildPropertySpecifier(code: prop.code, container: container)
+            let cmd = "get \(prop.name) of \(containerPath)"
+
+            let reply: NSAppleEventDescriptor
+            do {
+                reply = try sendGet(propSpec, command: cmd)
+            } catch {
+                continue
+            }
+
+            // Enum values come back as typeEnumerated (4CC enum code)
+            guard reply.descriptorType == typeEnumerated else {
+                // Not an enum type — might be coerced, skip
+                continue
+            }
+
+            let returnedCode = FourCharCode(reply.enumCodeValue).stringValue
+            let validCodes = Set(enumDef.enumerators.map(\.code))
+
+            if validCodes.contains(returnedCode) {
+                validCount += 1
+            } else {
+                invalidCount += 1
+                let validNames = enumDef.enumerators.map(\.name).joined(separator: ", ")
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-enum",
+                    message: "'\(prop.name)' of \(classDef.name) returned enum code '\(returnedCode)' not in \(enumDef.name) (\(validNames))",
+                    context: cmd
+                ))
+            }
+        }
     }
 }

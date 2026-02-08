@@ -1,3 +1,4 @@
+import AppKit
 import ArgumentParser
 import AEQueryLib
 import Foundation
@@ -61,6 +62,9 @@ struct AELintCommand: ParsableCommand {
             return
         }
 
+        // Gather app info
+        let appInfo = gatherAppInfo()
+
         // Run static validation
         let validator = SDEFValidator(dictionary: dictionary, appName: appName)
         var findings = validator.validate()
@@ -95,11 +99,11 @@ struct AELintCommand: ParsableCommand {
 
         // Output report
         if json {
-            printJSONReport(filteredFindings, timer: eventTimer, coverage: coverageTracker)
+            printJSONReport(filteredFindings, timer: eventTimer, coverage: coverageTracker, appInfo: appInfo)
         } else if html {
-            printHTMLReport(filteredFindings, dictionary: dictionary, timer: eventTimer, coverage: coverageTracker)
+            printHTMLReport(filteredFindings, dictionary: dictionary, timer: eventTimer, coverage: coverageTracker, appInfo: appInfo)
         } else {
-            printTextReport(filteredFindings, dictionary: dictionary, timer: eventTimer, coverage: coverageTracker)
+            printTextReport(filteredFindings, dictionary: dictionary, timer: eventTimer, coverage: coverageTracker, appInfo: appInfo)
         }
 
         // Exit with failure if any errors found
@@ -108,7 +112,7 @@ struct AELintCommand: ParsableCommand {
         }
     }
 
-    private func printTextReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil, coverage: CoverageTracker? = nil) {
+    private func printTextReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil, coverage: CoverageTracker? = nil, appInfo: AppInfo? = nil) {
         let errors = findings.filter { $0.severity == .error }
         let warnings = findings.filter { $0.severity == .warning }
         let info = findings.filter { $0.severity == .info }
@@ -118,6 +122,14 @@ struct AELintCommand: ParsableCommand {
 
         print("aelint report for \(appName)")
         print(String(repeating: "=", count: 40))
+
+        if let appInfo = appInfo, (appInfo.bundleID != nil || appInfo.path != nil) {
+            if let bid = appInfo.bundleID { print("Bundle ID: \(bid)") }
+            if let ver = appInfo.version { print("Version: \(ver)") }
+            if let path = appInfo.path { print("Path: \(path)") }
+            if let pid = appInfo.pid { print("PID: \(pid)") }
+        }
+
         print("Classes: \(dictionary.classes.count), Commands: \(cmdCount), Enumerations: \(enumCount)")
         print("Findings: \(errors.count) errors, \(warnings.count) warnings, \(info.count) info")
         print()
@@ -184,6 +196,9 @@ struct AELintCommand: ParsableCommand {
             ("dynamic-crud", "Make/delete round-trip"),
             ("dynamic-ordinal", "Ordinal access"),
             ("dynamic-cmd", "Command testing"),
+            ("dynamic-batch", "Batch property retrieval"),
+            ("dynamic-roundtrip", "Set round-trip"),
+            ("dynamic-enum", "Enumeration values"),
             ("dynamic-timing", "Timing"),
             ("dynamic-slow", "Slow events"),
             ("dynamic-coverage", "Test coverage"),
@@ -289,8 +304,17 @@ struct AELintCommand: ParsableCommand {
         print(String(repeating: "=", count: 40))
     }
 
-    private func printJSONReport(_ findings: [LintFinding], timer: EventTimer? = nil, coverage: CoverageTracker? = nil) {
+    private func printJSONReport(_ findings: [LintFinding], timer: EventTimer? = nil, coverage: CoverageTracker? = nil, appInfo: AppInfo? = nil) {
         var report: [String: Any] = [:]
+
+        if let appInfo = appInfo {
+            var info: [String: Any] = [:]
+            if let bid = appInfo.bundleID { info["bundleID"] = bid }
+            if let ver = appInfo.version { info["version"] = ver }
+            if let path = appInfo.path { info["path"] = path }
+            if let pid = appInfo.pid { info["pid"] = Int(pid) }
+            if !info.isEmpty { report["appInfo"] = info }
+        }
 
         let items: [[String: String]] = findings.map { finding in
             var dict: [String: String] = [
@@ -362,7 +386,7 @@ struct AELintCommand: ParsableCommand {
 
     // MARK: - HTML report
 
-    private func printHTMLReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil, coverage: CoverageTracker? = nil) {
+    private func printHTMLReport(_ findings: [LintFinding], dictionary: ScriptingDictionary, timer: EventTimer? = nil, coverage: CoverageTracker? = nil, appInfo: AppInfo? = nil) {
         let errors = findings.filter { $0.severity == .error }
         let warnings = findings.filter { $0.severity == .warning }
         let info = findings.filter { $0.severity == .info }
@@ -401,6 +425,15 @@ struct AELintCommand: ParsableCommand {
         // Summary box
         h += "<div class=\"summary\">\n"
         h += "<span class=\"score grade-\(grade)\">\(score)/100 (\(grade))</span>\n"
+
+        if let appInfo = appInfo, (appInfo.bundleID != nil || appInfo.path != nil) {
+            h += "<br>"
+            if let bid = appInfo.bundleID { h += "Bundle ID: \(escapeHTML(bid))" }
+            if let ver = appInfo.version { h += " &middot; Version: \(escapeHTML(ver))" }
+            if let pid = appInfo.pid { h += " &middot; PID: \(pid)" }
+            h += "<br>\n"
+        }
+
         h += "<br>Classes: \(dictionary.classes.count), Commands: \(cmdCount), Enumerations: \(enumCount)<br>\n"
         h += "Findings: <span class=\"sev-error\">\(errors.count) errors</span>, "
         h += "<span class=\"sev-warning\">\(warnings.count) warnings</span>, "
@@ -602,6 +635,57 @@ struct AELintCommand: ParsableCommand {
                 print("    \(e.name) [\(e.code)]")
             }
         }
+    }
+
+    // MARK: - App Info
+
+    private struct AppInfo {
+        let bundleID: String?
+        let version: String?
+        let path: String?
+        let pid: Int32?
+    }
+
+    private func gatherAppInfo() -> AppInfo {
+        let running = NSWorkspace.shared.runningApplications.first { app in
+            let lower = appName.lowercased()
+            if app.localizedName?.lowercased() == lower { return true }
+            if let url = app.bundleURL {
+                return url.deletingPathExtension().lastPathComponent.lowercased() == lower
+            }
+            return false
+        }
+
+        if let running = running {
+            let bundle = running.bundleURL.flatMap { Bundle(url: $0) }
+            return AppInfo(
+                bundleID: running.bundleIdentifier,
+                version: bundle?.infoDictionary?["CFBundleShortVersionString"] as? String,
+                path: running.bundleURL?.path,
+                pid: running.processIdentifier
+            )
+        }
+
+        // Not running — try to find info from the bundle
+        let candidates = [
+            "/Applications/\(appName).app",
+            "/System/Applications/\(appName).app",
+            "/System/Applications/Utilities/\(appName).app",
+            "/Applications/Utilities/\(appName).app",
+            "/System/Library/CoreServices/\(appName).app",
+        ]
+        for path in candidates {
+            if let bundle = Bundle(path: path) {
+                return AppInfo(
+                    bundleID: bundle.bundleIdentifier,
+                    version: bundle.infoDictionary?["CFBundleShortVersionString"] as? String,
+                    path: path,
+                    pid: nil
+                )
+            }
+        }
+
+        return AppInfo(bundleID: nil, version: nil, path: nil, pid: nil)
     }
 
     private func escapeHTML(_ str: String) -> String {
