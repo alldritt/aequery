@@ -21,13 +21,15 @@ public struct ResolvedStep: Equatable {
     public let code: String           // 4-char code
     public let predicates: [Predicate]
     public let className: String?     // the class this element refers to, for chaining
+    public let usedPluralForm: Bool   // true when the user wrote the plural name (e.g. "windows" vs "window")
 
-    public init(name: String, kind: Kind, code: String, predicates: [Predicate] = [], className: String? = nil) {
+    public init(name: String, kind: Kind, code: String, predicates: [Predicate] = [], className: String? = nil, usedPluralForm: Bool = false) {
         self.name = name
         self.kind = kind
         self.code = code
         self.predicates = predicates
         self.className = className
+        self.usedPluralForm = usedPluralForm
     }
 }
 
@@ -73,17 +75,20 @@ public struct SDEFResolver {
         for elem in allElems {
             let elemClass = dictionary.findClass(elem.type)
             if let elemClass = elemClass {
-                // Match by singular name, plural name, or type name
+                // Match by singular name, plural name, type name, or default plural
                 let singularMatch = elemClass.name.lowercased() == name
-                let pluralMatch = elemClass.pluralName?.lowercased() == name
+                let explicitPluralMatch = elemClass.pluralName?.lowercased() == name
+                let defaultPluralMatch = dictionary.defaultPlural(for: elemClass.name).lowercased() == name
                 let typeMatch = elem.type.lowercased() == name
-                if singularMatch || pluralMatch || typeMatch {
+                let isPlural = explicitPluralMatch || (!singularMatch && !typeMatch && defaultPluralMatch)
+                if singularMatch || explicitPluralMatch || defaultPluralMatch || typeMatch {
                     return ResolvedStep(
                         name: step.name,
                         kind: .element,
                         code: elemClass.code,
                         predicates: step.predicates,
-                        className: elemClass.name
+                        className: elemClass.name,
+                        usedPluralForm: isPlural
                     )
                 }
             }
@@ -110,13 +115,25 @@ public struct SDEFResolver {
 
         // Also check if the name matches a class that has a plural form
         if let cls = dictionary.findClassByPlural(name) {
-            // Verify it's accessible as an element
             return ResolvedStep(
                 name: step.name,
                 kind: .element,
                 code: cls.code,
                 predicates: step.predicates,
-                className: cls.name
+                className: cls.name,
+                usedPluralForm: true
+            )
+        }
+
+        // Check default pluralization (append "s") for classes without explicit plural
+        if let cls = dictionary.findClassByDefaultPlural(name) {
+            return ResolvedStep(
+                name: step.name,
+                kind: .element,
+                code: cls.code,
+                predicates: step.predicates,
+                className: cls.name,
+                usedPluralForm: true
             )
         }
 
@@ -160,13 +177,14 @@ public struct SDEFResolver {
             let name = step.name.lowercased()
             let isLast = (index == query.steps.count - 1)
 
-            // Check elements
+            // Check elements (including default plurals)
             let allElems = dictionary.allElements(for: currentClass)
             var foundAsElement = false
             for elem in allElems {
                 if let elemClass = dictionary.findClass(elem.type) {
                     let match = elemClass.name.lowercased() == name
                         || elemClass.pluralName?.lowercased() == name
+                        || dictionary.defaultPlural(for: elemClass.name).lowercased() == name
                         || elem.type.lowercased() == name
                     if match {
                         if isLast {
@@ -180,8 +198,15 @@ public struct SDEFResolver {
             }
             if foundAsElement { continue }
 
-            // Check plural lookup
+            // Check plural lookup (explicit and default)
             if let cls = dictionary.findClassByPlural(name) {
+                if isLast {
+                    return .classInfo(classDetail(cls))
+                }
+                currentClass = cls
+                continue
+            }
+            if let cls = dictionary.findClassByDefaultPlural(name) {
                 if isLast {
                     return .classInfo(classDetail(cls))
                 }

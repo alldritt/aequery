@@ -208,7 +208,7 @@ Sources/
 swift test
 ```
 
-132 tests across 10 suites covering the lexer, parser, SDEF parsing, resolver, path finder, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
+183 tests across 11 suites covering the lexer, parser, SDEF parsing, resolver, path finder, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
 
 ## Requirements
 
