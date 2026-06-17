@@ -710,22 +710,45 @@ struct SDEFValidator {
             for prop in cls.properties { recordType(prop.type) }
         }
 
-        // Seed the reachable set with the application root, classes referenced
-        // as command/property types, and every class the path finder can locate
-        // via element/property containment within the depth limit.
-        var reachable = Set<String>(["application"])
-        reachable.formUnion(typeReferenced)
+        // Track why each class is reachable so we can surface the one inference
+        // that is a genuine presumption: a subclass reached only through a
+        // parent's accessor (see the downward case below). The first reason a
+        // class is reached wins.
+        enum ReachReason {
+            case direct                          // path finder, root, or type reference
+            case inheritedDown(parent: String)   // subclass reached via a reachable parent's accessor
+            case inheritedUp                     // superclass reached via a reachable subclass instance
+            case containment                     // element/property of a reachable class
+        }
+        var reason: [String: ReachReason] = [:]
+        @discardableResult
+        func mark(_ name: String, _ r: ReachReason) -> Bool {
+            let key = name.lowercased()
+            if reason[key] != nil { return false }
+            reason[key] = r
+            return true
+        }
+        func isReachable(_ name: String) -> Bool { reason[name.lowercased()] != nil }
+
+        // Seed with the application root, classes referenced as command/property
+        // types, and every class the path finder can locate via element/property
+        // containment within the depth limit.
+        mark("application", .direct)
+        for name in typeReferenced { mark(name, .direct) }
         for cls in dictionary.classes.values where !cls.hidden {
             if !pathFinder.findPaths(to: cls.name, maxDepth: maxDepth).isEmpty {
-                reachable.insert(cls.name.lowercased())
+                mark(cls.name, .direct)
             }
         }
 
-        // Close over two relationships the literal path finder doesn't follow:
-        //   - inheritance: a parent's element/accessor returns subclass
+        // Close over relationships the literal path finder doesn't follow:
+        //   - inheritance down: a parent's element/accessor returns subclass
         //     instances at runtime, so a subclass of a reachable class is
         //     reachable (e.g. BBEdit's 'documents' element yields 'project
-        //     document').
+        //     document'). This is the presumption we report below.
+        //   - inheritance up: an instance of a reachable subclass is also an
+        //     instance of each ancestor, so a superclass is reachable too
+        //     (e.g. every 'project item' is an 'item').
         //   - containment from a newly-reachable class: the path finder can't
         //     reach a subclass container like 'project document', so it never
         //     indexed the elements/properties it holds ('project item',
@@ -734,48 +757,51 @@ struct SDEFValidator {
         while changed {
             changed = false
             for cls in dictionary.classes.values where !cls.hidden {
-                let key = cls.name.lowercased()
-                if reachable.contains(key) { continue }
-                if let parent = cls.inherits?.lowercased(), reachable.contains(parent) {
-                    reachable.insert(key)
-                    changed = true
+                if isReachable(cls.name) { continue }
+                if let parent = cls.inherits, isReachable(parent) {
+                    if mark(cls.name, .inheritedDown(parent: parent)) { changed = true }
                 }
             }
-            // Upward: an instance of a reachable subclass is also an instance of
-            // each of its ancestors, so a superclass of a reachable class is
-            // reachable too (e.g. every 'project item' is an 'item', so the
-            // abstract 'item' base is reachable through its subclasses).
-            for cls in dictionary.classes.values where reachable.contains(cls.name.lowercased()) {
-                if let parentName = cls.inherits, let parent = dictionary.findClass(parentName),
-                   reachable.insert(parent.name.lowercased()).inserted {
-                    changed = true
+            for cls in dictionary.classes.values where isReachable(cls.name) {
+                if let parentName = cls.inherits, let parent = dictionary.findClass(parentName) {
+                    if mark(parent.name, .inheritedUp) { changed = true }
                 }
             }
-            for cls in dictionary.classes.values where reachable.contains(cls.name.lowercased()) {
+            for cls in dictionary.classes.values where isReachable(cls.name) {
                 for elem in dictionary.allElements(for: cls) where !elem.hidden {
-                    if let t = dictionary.findClass(elem.type), !t.hidden,
-                       reachable.insert(t.name.lowercased()).inserted {
+                    if let t = dictionary.findClass(elem.type), !t.hidden, mark(t.name, .containment) {
                         changed = true
                     }
                 }
                 for prop in dictionary.allProperties(for: cls) where !prop.hidden {
                     guard let pt = prop.type, let t = dictionary.findClass(pt), !t.hidden else { continue }
-                    if reachable.insert(t.name.lowercased()).inserted {
-                        changed = true
-                    }
+                    if mark(t.name, .containment) { changed = true }
                 }
             }
         }
 
         for cls in dictionary.classes.values {
             if cls.hidden { continue }
-            if reachable.contains(cls.name.lowercased()) { continue }
-
-            findings.append(LintFinding(
-                .warning, category: "unreachable",
-                message: "Class '\(cls.name)' is not reachable from the application root",
-                context: "No containment path found within depth \(maxDepth)"
-            ))
+            switch reason[cls.name.lowercased()] {
+            case nil:
+                findings.append(LintFinding(
+                    .warning, category: "unreachable",
+                    message: "Class '\(cls.name)' is not reachable from the application root",
+                    context: "No containment path found within depth \(maxDepth)"
+                ))
+            case .inheritedDown(let parent):
+                // The class has no accessor of its own; we presume it is obtained
+                // through its parent's element, which can return subclass
+                // instances at runtime. Worth noting in case the app never
+                // actually returns this subclass.
+                findings.append(LintFinding(
+                    .info, category: "inferred-reachable",
+                    message: "Class '\(cls.name)' has no direct containment path; assumed reachable via parent class '\(parent)'",
+                    context: "Subclass instances are obtained through the parent's element accessor"
+                ))
+            default:
+                break
+            }
         }
 
         return findings
