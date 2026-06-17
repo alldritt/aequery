@@ -710,19 +710,62 @@ struct SDEFValidator {
             for prop in cls.properties { recordType(prop.type) }
         }
 
+        // Seed the reachable set with the application root, classes referenced
+        // as command/property types, and every class the path finder can locate
+        // via element/property containment within the depth limit.
+        var reachable = Set<String>(["application"])
+        reachable.formUnion(typeReferenced)
+        for cls in dictionary.classes.values where !cls.hidden {
+            if !pathFinder.findPaths(to: cls.name, maxDepth: maxDepth).isEmpty {
+                reachable.insert(cls.name.lowercased())
+            }
+        }
+
+        // Close over two relationships the literal path finder doesn't follow:
+        //   - inheritance: a parent's element/accessor returns subclass
+        //     instances at runtime, so a subclass of a reachable class is
+        //     reachable (e.g. BBEdit's 'documents' element yields 'project
+        //     document').
+        //   - containment from a newly-reachable class: the path finder can't
+        //     reach a subclass container like 'project document', so it never
+        //     indexed the elements/properties it holds ('project item',
+        //     'project collection'). Once the container is reachable, they are.
+        var changed = true
+        while changed {
+            changed = false
+            for cls in dictionary.classes.values where !cls.hidden {
+                let key = cls.name.lowercased()
+                if reachable.contains(key) { continue }
+                if let parent = cls.inherits?.lowercased(), reachable.contains(parent) {
+                    reachable.insert(key)
+                    changed = true
+                }
+            }
+            for cls in dictionary.classes.values where reachable.contains(cls.name.lowercased()) {
+                for elem in dictionary.allElements(for: cls) where !elem.hidden {
+                    if let t = dictionary.findClass(elem.type), !t.hidden,
+                       reachable.insert(t.name.lowercased()).inserted {
+                        changed = true
+                    }
+                }
+                for prop in dictionary.allProperties(for: cls) where !prop.hidden {
+                    guard let pt = prop.type, let t = dictionary.findClass(pt), !t.hidden else { continue }
+                    if reachable.insert(t.name.lowercased()).inserted {
+                        changed = true
+                    }
+                }
+            }
+        }
+
         for cls in dictionary.classes.values {
             if cls.hidden { continue }
-            if cls.name.lowercased() == "application" { continue }
-            if typeReferenced.contains(cls.name.lowercased()) { continue }
+            if reachable.contains(cls.name.lowercased()) { continue }
 
-            let paths = pathFinder.findPaths(to: cls.name, maxDepth: maxDepth)
-            if paths.isEmpty {
-                findings.append(LintFinding(
-                    .warning, category: "unreachable",
-                    message: "Class '\(cls.name)' is not reachable from the application root",
-                    context: "No containment path found within depth \(maxDepth)"
-                ))
-            }
+            findings.append(LintFinding(
+                .warning, category: "unreachable",
+                message: "Class '\(cls.name)' is not reachable from the application root",
+                context: "No containment path found within depth \(maxDepth)"
+            ))
         }
 
         return findings
