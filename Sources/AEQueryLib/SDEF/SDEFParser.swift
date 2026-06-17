@@ -96,11 +96,14 @@ public struct SDEFParser {
         if let suiteName = suiteName {
             dictionary.suiteNames.append(suiteName)
         }
+        // A hidden suite hides everything it contains, so propagate the flag to
+        // each class, enumeration, and command parsed below.
+        let suiteHidden = suite.attribute(forName: "hidden")?.stringValue == "yes"
 
         // Parse classes
         for node in try suite.nodes(forXPath: "class") {
             guard let element = node as? XMLElement else { continue }
-            let classDef = try parseClass(element)
+            let classDef = try parseClass(element, suiteHidden: suiteHidden)
             dictionary.addClass(classDef)
         }
 
@@ -116,26 +119,26 @@ public struct SDEFParser {
         // Parse enumerations
         for node in try suite.nodes(forXPath: "enumeration") {
             guard let element = node as? XMLElement else { continue }
-            let enumDef = parseEnumeration(element)
+            let enumDef = parseEnumeration(element, suiteHidden: suiteHidden)
             dictionary.enumerations[enumDef.name.lowercased()] = enumDef
         }
 
         // Parse commands
         for node in try suite.nodes(forXPath: "command") {
             guard let element = node as? XMLElement else { continue }
-            let commandDef = parseCommand(element, suiteName: suiteName)
+            let commandDef = parseCommand(element, suiteName: suiteName, suiteHidden: suiteHidden)
             dictionary.commands[commandDef.name.lowercased()] = commandDef
         }
     }
 
-    private func parseClass(_ element: XMLElement) throws -> ClassDef {
+    private func parseClass(_ element: XMLElement, suiteHidden: Bool) throws -> ClassDef {
         guard let name = element.attribute(forName: "name")?.stringValue,
               let code = element.attribute(forName: "code")?.stringValue else {
             throw SDEFParserError.missingAttribute("name or code on class")
         }
         let plural = element.attribute(forName: "plural")?.stringValue
         let inherits = element.attribute(forName: "inherits")?.stringValue
-        let hidden = element.attribute(forName: "hidden")?.stringValue == "yes"
+        let hidden = suiteHidden || element.attribute(forName: "hidden")?.stringValue == "yes"
         let description = element.attribute(forName: "description")?.stringValue
         let properties = parseProperties(element)
         let elements = parseElements(element)
@@ -202,9 +205,10 @@ public struct SDEFParser {
         return types.isEmpty ? nil : types.joined(separator: " / ")
     }
 
-    private func parseEnumeration(_ element: XMLElement) -> EnumDef {
+    private func parseEnumeration(_ element: XMLElement, suiteHidden: Bool) -> EnumDef {
         let name = element.attribute(forName: "name")?.stringValue ?? ""
         let code = element.attribute(forName: "code")?.stringValue
+        let hidden = suiteHidden || element.attribute(forName: "hidden")?.stringValue == "yes"
         var enumerators: [Enumerator] = []
         for node in (try? element.nodes(forXPath: "enumerator")) ?? [] {
             guard let enumElement = node as? XMLElement,
@@ -212,14 +216,14 @@ public struct SDEFParser {
                   let eCode = enumElement.attribute(forName: "code")?.stringValue else { continue }
             enumerators.append(Enumerator(name: eName, code: eCode))
         }
-        return EnumDef(name: name, code: code, enumerators: enumerators)
+        return EnumDef(name: name, code: code, enumerators: enumerators, hidden: hidden)
     }
 
-    private func parseCommand(_ element: XMLElement, suiteName: String?) -> CommandDef {
+    private func parseCommand(_ element: XMLElement, suiteName: String?, suiteHidden: Bool) -> CommandDef {
         let name = element.attribute(forName: "name")?.stringValue ?? ""
         let code = element.attribute(forName: "code")?.stringValue ?? ""
         let description = element.attribute(forName: "description")?.stringValue
-        let hidden = element.attribute(forName: "hidden")?.stringValue == "yes"
+        let hidden = suiteHidden || element.attribute(forName: "hidden")?.stringValue == "yes"
 
         // Parse direct-parameter
         var directParam: CommandParam? = nil

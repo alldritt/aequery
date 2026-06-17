@@ -160,6 +160,40 @@ struct SDEFParserTests {
         #expect(enumDef?.enumerators[0].code == "yes ")
     }
 
+    @Test func testHiddenSuitePropagates() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <enumeration name="save options" code="savo">
+                    <enumerator name="yes" code="yes "/>
+                </enumeration>
+                <command name="open" code="aevtodoc"/>
+            </suite>
+            <suite name="Private" code="prv1" hidden="yes">
+                <class name="secret" code="scrt"/>
+                <enumeration name="internal mode" code="imod">
+                    <enumerator name="alpha" code="alfa"/>
+                </enumeration>
+                <command name="do secret thing" code="prv1dsth"/>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+
+        // Visible suite contents are not hidden.
+        #expect(dict.findClass("application")?.hidden == false)
+        #expect(dict.findEnumeration("save options")?.hidden == false)
+        #expect(dict.commands["open"]?.hidden == false)
+
+        // Hidden suite contents inherit the suite's hidden flag.
+        #expect(dict.findClass("secret")?.hidden == true)
+        #expect(dict.findEnumeration("internal mode")?.hidden == true)
+        #expect(dict.commands["do secret thing"]?.hidden == true)
+    }
+
     @Test func testMissingPluralName() throws {
         let sdef = """
         <?xml version="1.0" encoding="UTF-8"?>

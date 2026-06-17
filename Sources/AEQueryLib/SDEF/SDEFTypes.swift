@@ -216,11 +216,13 @@ public struct EnumDef: Equatable {
     public let name: String
     public let code: String?
     public let enumerators: [Enumerator]
+    public let hidden: Bool
 
-    public init(name: String, code: String? = nil, enumerators: [Enumerator] = []) {
+    public init(name: String, code: String? = nil, enumerators: [Enumerator] = [], hidden: Bool = false) {
         self.name = name
         self.code = code
         self.enumerators = enumerators
+        self.hidden = hidden
     }
 }
 

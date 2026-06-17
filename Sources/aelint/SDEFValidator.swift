@@ -115,6 +115,7 @@ struct SDEFValidator {
         // Check enumerator codes across all enumerations
         var enumCodes: [String: [(enumName: String, valueName: String)]] = [:]
         for enumDef in dictionary.enumerations.values {
+            if enumDef.hidden { continue }
             for enumerator in enumDef.enumerators {
                 enumCodes[enumerator.code, default: []].append((enumDef.name, enumerator.name))
             }
@@ -387,6 +388,7 @@ struct SDEFValidator {
         }
 
         for enumDef in dictionary.enumerations.values {
+            if enumDef.hidden { continue }
             if !referencedTypes.contains(enumDef.name.lowercased()) {
                 findings.append(LintFinding(
                     .info, category: "unused-enum",
