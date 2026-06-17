@@ -690,14 +690,15 @@ struct SDEFValidator {
     func validateReachability(pathFinder: SDEFPathFinder, maxDepth: Int) -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Classes referenced as a command's result or parameter type are reached
-        // by invoking the command, not through element containment, so they
-        // wouldn't be found by the path finder. Collect them as exempt.
-        var commandReferenced = Set<String>()
+        // Classes referenced as a command's result/parameter type, or as the
+        // type of another class's property, are reached by invoking a command
+        // or reading a property rather than through element containment, so the
+        // path finder wouldn't locate them. Collect them as exempt.
+        var typeReferenced = Set<String>()
         func recordType(_ type: String?) {
             guard let type else { return }
             for name in ScriptingDictionary.componentTypeNames(of: type) {
-                commandReferenced.insert(name.lowercased())
+                typeReferenced.insert(name.lowercased())
             }
         }
         for cmd in dictionary.commands.values {
@@ -705,11 +706,14 @@ struct SDEFValidator {
             recordType(cmd.directParameter?.type)
             for param in cmd.parameters { recordType(param.type) }
         }
+        for cls in dictionary.classes.values {
+            for prop in cls.properties { recordType(prop.type) }
+        }
 
         for cls in dictionary.classes.values {
             if cls.hidden { continue }
             if cls.name.lowercased() == "application" { continue }
-            if commandReferenced.contains(cls.name.lowercased()) { continue }
+            if typeReferenced.contains(cls.name.lowercased()) { continue }
 
             let paths = pathFinder.findPaths(to: cls.name, maxDepth: maxDepth)
             if paths.isEmpty {
