@@ -741,6 +741,16 @@ struct SDEFValidator {
                     changed = true
                 }
             }
+            // Upward: an instance of a reachable subclass is also an instance of
+            // each of its ancestors, so a superclass of a reachable class is
+            // reachable too (e.g. every 'project item' is an 'item', so the
+            // abstract 'item' base is reachable through its subclasses).
+            for cls in dictionary.classes.values where reachable.contains(cls.name.lowercased()) {
+                if let parentName = cls.inherits, let parent = dictionary.findClass(parentName),
+                   reachable.insert(parent.name.lowercased()).inserted {
+                    changed = true
+                }
+            }
             for cls in dictionary.classes.values where reachable.contains(cls.name.lowercased()) {
                 for elem in dictionary.allElements(for: cls) where !elem.hidden {
                     if let t = dictionary.findClass(elem.type), !t.hidden,
