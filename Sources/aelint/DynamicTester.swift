@@ -1532,9 +1532,22 @@ struct DynamicTester {
     }
 
     private func isTypeCompatible(declaredType: String, actualDescType: DescType) -> Bool {
-        let lower = declaredType.lowercased()
         let actual = FourCharCode(actualDescType)
         let actualStr = actual.stringValue
+
+        // A `list of <type>` declaration should come back as a list descriptor.
+        if ScriptingDictionary.isListType(declaredType) {
+            return actualStr == "list"
+        }
+        // Union types (`A | B`, `A / B`) are compatible if any component matches.
+        let components = ScriptingDictionary.componentTypeNames(of: declaredType)
+        if components.count > 1 {
+            return components.contains {
+                isTypeCompatible(declaredType: $0, actualDescType: actualDescType)
+            }
+        }
+
+        let lower = declaredType.lowercased()
 
         switch lower {
         case "text", "string":

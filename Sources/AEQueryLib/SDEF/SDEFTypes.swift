@@ -109,6 +109,39 @@ public struct ScriptingDictionary {
         enumerations[name.lowercased()]
     }
 
+    /// Decompose a composite type string into its constituent base type names.
+    ///
+    /// Real-world SDEFs use two compound forms that a single type lookup can't
+    /// resolve directly:
+    ///   - `list of <type>` — the older syntax for a typed list, still common.
+    ///   - `A | B` or `A / B` — alternative-type lists used by some apps (e.g.
+    ///     Apple's Pages and Keynote) to declare several acceptable types. The
+    ///     SDEF parser itself also joins multiple nested `<type>` elements with
+    ///     `" / "`.
+    ///
+    /// Returns the trimmed base type names with any `list of ` prefix removed,
+    /// so each can be checked against `findClass`/`findEnumeration`. A plain
+    /// type like `text` returns `["text"]`.
+    public static func componentTypeNames(of type: String) -> [String] {
+        let parts = type.components(separatedBy: CharacterSet(charactersIn: "|/"))
+        var names: [String] = []
+        for raw in parts {
+            var t = raw.trimmingCharacters(in: .whitespaces)
+            // Strip any leading `list of ` (the legacy typed-list syntax).
+            while t.lowercased().hasPrefix("list of ") {
+                t = String(t.dropFirst("list of ".count)).trimmingCharacters(in: .whitespaces)
+            }
+            if !t.isEmpty { names.append(t) }
+        }
+        return names.isEmpty ? [type.trimmingCharacters(in: .whitespaces)] : names
+    }
+
+    /// Whether a (possibly composite) type string refers only to a typed list,
+    /// e.g. `list of paragraph` or `list of text | list of file`.
+    public static func isListType(_ type: String) -> Bool {
+        type.lowercased().contains("list of ")
+    }
+
     /// Find a class definition by its four-character code
     public func findClassByCode(_ code: String) -> ClassDef? {
         classes.values.first { $0.code == code }

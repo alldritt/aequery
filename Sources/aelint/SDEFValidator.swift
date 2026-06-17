@@ -236,15 +236,19 @@ struct SDEFValidator {
         for cls in dictionary.classes.values {
             for prop in cls.properties {
                 guard let type = prop.type else { continue }
-                let lower = type.lowercased()
-                if builtinTypes.contains(lower) { continue }
-                if dictionary.findClass(type) != nil { continue }
-                if dictionary.findEnumeration(type) != nil { continue }
-                findings.append(LintFinding(
-                    .info, category: "undefined-type",
-                    message: "Property '\(prop.name)' in class '\(cls.name)' has type '\(type)' which is not defined in the SDEF",
-                    context: "May be a system-defined type"
-                ))
+                // Decompose `list of X` and `A | B` / `A / B` composite types
+                // into their base names before checking each one.
+                for name in ScriptingDictionary.componentTypeNames(of: type) {
+                    let lower = name.lowercased()
+                    if builtinTypes.contains(lower) { continue }
+                    if dictionary.findClass(name) != nil { continue }
+                    if dictionary.findEnumeration(name) != nil { continue }
+                    findings.append(LintFinding(
+                        .info, category: "undefined-type",
+                        message: "Property '\(prop.name)' in class '\(cls.name)' has type '\(name)' which is not defined in the SDEF",
+                        context: "May be a system-defined type"
+                    ))
+                }
             }
         }
 
@@ -359,27 +363,27 @@ struct SDEFValidator {
     private func checkUnusedEnumerations() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Collect all types referenced by properties and command parameters
+        // Collect all types referenced by properties and command parameters,
+        // decomposing `list of X` and `A | B` / `A / B` composite types so an
+        // enum referenced only via such a form isn't reported as unused.
         var referencedTypes = Set<String>()
+        func record(_ type: String?) {
+            guard let type else { return }
+            for name in ScriptingDictionary.componentTypeNames(of: type) {
+                referencedTypes.insert(name.lowercased())
+            }
+        }
         for cls in dictionary.classes.values {
             for prop in cls.properties {
-                if let type = prop.type {
-                    referencedTypes.insert(type.lowercased())
-                }
+                record(prop.type)
             }
         }
         for cmd in dictionary.commands.values {
-            if let type = cmd.directParameter?.type {
-                referencedTypes.insert(type.lowercased())
-            }
+            record(cmd.directParameter?.type)
             for param in cmd.parameters {
-                if let type = param.type {
-                    referencedTypes.insert(type.lowercased())
-                }
+                record(param.type)
             }
-            if let type = cmd.result?.type {
-                referencedTypes.insert(type.lowercased())
-            }
+            record(cmd.result?.type)
         }
 
         for enumDef in dictionary.enumerations.values {
@@ -467,15 +471,19 @@ struct SDEFValidator {
             let allParamTypes = cmd.parameters.compactMap(\.type) +
                 [cmd.directParameter?.type, cmd.result?.type].compactMap { $0 }
             for type in allParamTypes {
-                let lower = type.lowercased()
-                if builtinTypes.contains(lower) { continue }
-                if dictionary.findClass(type) != nil { continue }
-                if dictionary.findEnumeration(type) != nil { continue }
-                findings.append(LintFinding(
-                    .info, category: "undefined-command-type",
-                    message: "Command '\(cmd.name)' references type '\(type)' which is not defined in the SDEF",
-                    context: "May be a system-defined type"
-                ))
+                // Decompose `list of X` and `A | B` / `A / B` composite types
+                // into their base names before checking each one.
+                for name in ScriptingDictionary.componentTypeNames(of: type) {
+                    let lower = name.lowercased()
+                    if builtinTypes.contains(lower) { continue }
+                    if dictionary.findClass(name) != nil { continue }
+                    if dictionary.findEnumeration(name) != nil { continue }
+                    findings.append(LintFinding(
+                        .info, category: "undefined-command-type",
+                        message: "Command '\(cmd.name)' references type '\(name)' which is not defined in the SDEF",
+                        context: "May be a system-defined type"
+                    ))
+                }
             }
         }
 
