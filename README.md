@@ -9,6 +9,12 @@ brew tap alldritt/tools
 brew install aequery
 ```
 
+A companion tool, `aelint`, validates and tests an application's scripting interface. See [aelint](#aelint) below.
+
+```
+brew install aelint
+```
+
 ## Build
 
 ```
@@ -185,13 +191,82 @@ When you use an expression like `/Finder/...`, aequery locates the application i
 
 If none of these find the app, an error is returned. You can bypass resolution entirely with `--sdef-file` to load a scripting dictionary from a file. Use `--verbose` to see which app path was resolved.
 
+
+## aelint
+
+`aelint` is a companion tool that validates and tests a scriptable application's scripting interface. It reads the same SDEF that `aequery` uses, runs a set of static checks against the dictionary, and can optionally exercise the running application with live Apple Events to confirm the interface behaves as it's described.
+
+```
+aelint <AppName> [--dynamic] [--json | --html] [--summary] [--sdef-file <path>] [options]
+```
+
+### What it checks
+
+The static checks read the SDEF alone and need only the dictionary:
+
+- Undefined classes, property types, and command parameter/result types
+- Inheritance cycles and classes that aren't reachable from the application root
+- Duplicate four-character codes across classes, commands, and parameters
+- Missing or non-standard plural element names
+- Reserved-word and Standard Suite term clashes
+- Empty classes, unused enumerations, and missing documentation
+
+With `--dynamic`, aelint sends Apple Events to the running application to test what the dictionary claims: reading properties, accessing elements by index, range, and ordinal, `whose` clauses, `exists`, `count`, enumeration round-trips, and command probing. Events slower than `--slow-threshold` (default 1s) are flagged, and a coverage summary reports how much of the interface was exercised.
+
+**NOTE:** `--dynamic` sends real Apple Events to the target application, which may create, modify, or delete data. Run it against an application you don't mind poking at.
+
+### Example
+
+```
+$ aelint TextEdit
+aelint report for TextEdit
+========================================
+Bundle ID: com.apple.TextEdit
+Version: 1.20
+Path: /System/Applications/TextEdit.app
+Classes: 12, Commands: 13, Enumerations: 2
+Findings: 0 errors, 1 warnings, 3 info
+
+! WARNING (1)
+----------------------------------------
+  undefined-class: Class 'attachment' inherits from undefined class 'text.ctxt'
+
+i INFO (3)
+----------------------------------------
+  undefined-type: Property 'text' in class 'document' has type 'text.ctxt' which is not defined in the SDEF
+  missing-plural: Class 'attachment' has no explicit plural (defaults to 'attachments')
+  documentation: 1 of 12 classes (8%) have no description
+
+========================================
+Quality Score: 99/100 (A)
+========================================
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--dynamic` | Run dynamic tests (sends Apple Events to the running application) |
+| `--json` | Output the report as JSON |
+| `--html` | Output the report as HTML |
+| `--summary` | Print the SDEF dictionary outline and exit |
+| `--severity <level>` | Minimum severity to display: `error`, `warning`, or `info` (default: `info`) |
+| `--log` | Log each Apple Event sent and its result to stderr |
+| `--timeout <sec>` | Per-event timeout for dynamic tests (default: 10) |
+| `--slow-threshold <sec>` | Events above this are flagged as slow (default: 1.0) |
+| `--max-depth <n>` | Maximum containment depth for path enumeration (default: 6) |
+| `--sdef-file <path>` | Load SDEF from a file instead of from the application bundle |
+
+Reports are plain text by default; `--json` gives machine-readable output and `--html` a formatted report for the browser. aelint exits with a non-zero status when any errors are found, so it can gate a build.
+
 ## Architecture
 
 The tool is split into a library (`AEQueryLib`) and a CLI (`aequery`):
 
 ```
 Sources/
-├── aequery/main.swift              # CLI entry point
+├── aequery/main.swift              # aequery CLI entry point
+├── aelint/                         # aelint CLI (static checks + dynamic tests)
 └── AEQueryLib/
     ├── Lexer/                      # Tokenizer
     ├── Parser/                     # Recursive descent parser → AST
@@ -208,7 +283,7 @@ Sources/
 swift test
 ```
 
-183 tests across 11 suites covering the lexer, parser, SDEF parsing, resolver, path finder, specifier building, descriptor decoding, output formatting, and live integration tests against Finder.
+191 tests across 12 suites covering the lexer, parser, SDEF parsing, resolver, path finder, specifier building, descriptor decoding, output formatting, composite type name resolution, and live integration tests against Finder.
 
 ## Requirements
 
