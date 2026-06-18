@@ -211,9 +211,49 @@ The static checks read the SDEF alone and need only the dictionary:
 - Reserved-word and Standard Suite term clashes
 - Empty classes, unused enumerations, and missing documentation
 
-With `--dynamic`, aelint sends Apple Events to the running application to test what the dictionary claims: reading properties, accessing elements by index, range, and ordinal, `whose` clauses, `exists`, `count`, enumeration round-trips, and command probing. Events slower than `--slow-threshold` (default 1s) are flagged, and a coverage summary reports how much of the interface was exercised.
+### Dynamic testing
 
-**NOTE:** `--dynamic` sends real Apple Events to the target application, which may create, modify, or delete data. Run it against an application you don't mind poking at.
+With `--dynamic`, aelint connects to the running application and exercises the interface the dictionary describes, one phase at a time. It's designed to be non-destructive — anything a phase touches is restored before it moves on.
+
+- **Reading and counting.** Reads every application and element property, counts the elements of each type, and retrieves properties in bulk with `get <property> of every <element>`.
+- **Element access.** Reaches elements by index, by negative index, by ordinal (`first`, `middle`, `last`), and by range, then confirms the results.
+- **Filtering.** Runs `whose` clauses with the textual operators (`contains`, `begins with`, `=`) and the numeric ones (`>`, `<`, `≥`, `≤`), and checks `exists`.
+- **Type validation.** Compares the runtime descriptor type of each value against the type declared in the SDEF and reports mismatches.
+- **Setting properties.** For each writable property it reads the current value and sets it straight back to the same value — enough to prove the property is settable without changing it. A property declared read-write that rejects the set is reported.
+- **Creating and deleting.** Where the app declares `make` and `delete`, it creates a new element — limited to `document`, `window`, and `tab` — verifies the count went up, deletes it, and verifies the count returns to where it started.
+- **Commands.** Probes each command (skipping destructive verbs like `quit`, `close`, `save`, `print`, `move`, and `duplicate`) to confirm the application actually handles the event its dictionary advertises.
+- **Enumerations.** Round-trips enumerated values to confirm they're accepted.
+
+Events slower than `--slow-threshold` (default 1s) are flagged, a per-event `--timeout` (default 10s) guards against an unresponsive app, and a coverage summary reports how much of the interface was exercised.
+
+**NOTE:** Even though the tests restore what they touch, `--dynamic` sends real Apple Events — including `make`, `delete`, and `set` — to the live application. A bug in the app's own handlers could still lose data. Run it against an application you don't mind poking at, not one holding unsaved work.
+
+### What the findings mean
+
+Every finding names a category. The static checks and why each one matters:
+
+| Category | Severity | Meaning and consequence |
+|----------|----------|-------------------------|
+| `duplicate-code` | error / warning | Two classes, or two properties of one class, share a four-character code (error); two commands or two enumerators share one (warning). Apple Events identify everything by its 4CC, not its name, so a duplicated code makes the term ambiguous — AppleScript can resolve a name to the wrong object, or send a code that means something else. |
+| `invalid-code` | error | A class or property code isn't exactly four bytes, or a command code isn't eight. The code can't be packed into an Apple Event correctly. |
+| `duplicate-param-code` | error | Two parameters of one command share a code. An Apple Event is a record keyed by code, so the second parameter overwrites the first and one becomes unreachable. |
+| `duplicate-command-code` | warning | Two commands share an event code. The application can't tell which one was invoked. |
+| `inheritance-cycle` | error | A class inherits from itself through a loop. Inherited properties and elements can't be resolved, and tools that walk the inheritance chain will hang. |
+| `undefined-class` | error / warning | An element's type (error) or a class's parent (warning) names a class that isn't in the dictionary. Scripts can't resolve that element, and inherited members are lost. |
+| `undefined-type`, `undefined-command-type` | info | A property, or a command parameter/result, names a type that isn't defined in the SDEF. Usually a system type, but worth checking for a typo or a missing definition — tooling can't validate or display it. |
+| `name-clash` | warning | A name is both an element and a property of the same class. `window of x` is then ambiguous, so object specifier construction may target the wrong one. |
+| `missing-plural` | info / warning | A class used as an element has no explicit plural, which AppleScript needs for `every window` / `windows`. Info when appending "s" yields the right word; warning when it doesn't (e.g. `shelf` → `shelfs`), in which case the plural users expect won't work. |
+| `non-standard-term` | warning | A well-known code such as `pnam` carries a non-standard name. Standard idioms like `name of` won't behave the way scripters expect. |
+| `reserved-word` | warning / info | A class (warning) or property (info) name collides with an AppleScript keyword. Scripts using the bare term won't compile; `of` syntax or quoting is needed to disambiguate. |
+| `standard-suite` | warning / info | The application class is missing — or uses non-standard codes for — expected Standard Suite properties, elements, or commands. Generic clients and standard idioms that assume the Standard Suite may not work. |
+| `unreachable` | warning | No containment path reaches the class from the application root within `--max-depth`. Scripts can't navigate to it; it may be dead or missing an accessor. |
+| `inferred-reachable` | info | The class is reached only through a parent's accessor that can return subclass instances at runtime. Noted in case the app never actually returns that subclass. |
+| `unused-enum` | info | An enumeration isn't referenced by any property or command — either dead weight, or a sign that a property's type is missing. |
+| `empty-class` | info | A class has no visible properties or elements. Likely incomplete, or only a placeholder type. |
+| `documentation` | info | Some classes or commands have no description, so dictionary viewers show no help for them. |
+| `hidden-items` | info | Counts the classes, properties, and commands marked hidden. Informational. |
+
+Dynamic findings are prefixed `dynamic-` and describe runtime behaviour rather than dictionary defects: a property declared read-write that rejects a `set`, a command the dictionary lists but the app doesn't handle, a value whose runtime type doesn't match its declared type, or an event slower than the threshold. Each message spells out the specific mismatch and the command that produced it.
 
 ### Example
 
