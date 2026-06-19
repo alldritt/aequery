@@ -368,6 +368,39 @@ struct DynamicTester {
         return "<\(FourCharCode(dt).stringValue)>"
     }
 
+    /// Render a property value as an AppleScript *source literal* for display in
+    /// a `set …` command. Unlike `describeResult` (which formats values the way
+    /// AppleScript prints results), this leaves booleans and enumeration
+    /// constants unquoted so the shown command is valid AppleScript — e.g.
+    /// `set mode … to normal`, not `set mode … to "normal"`.
+    private func setValueLiteral(_ desc: NSAppleEventDescriptor, prop: PropertyDef) -> String {
+        let dt = desc.descriptorType
+
+        // Booleans are bare keywords.
+        if dt == typeType(for: "bool") || dt == typeType(for: "true") || dt == typeType(for: "fals") {
+            return desc.booleanValue ? "true" : "false"
+        }
+
+        // Enumeration-typed properties render as the bare enumerator name. The
+        // value may arrive as an enum four-char code (typeEnumerated/typeType)
+        // or, for apps that report it textually, as the readable name already.
+        if let propType = prop.type, let enumDef = dictionary.findEnumeration(propType) {
+            let raw: String?
+            if dt == typeType(for: "enum") || dt == typeType(for: "type") {
+                raw = FourCharCode(desc.enumCodeValue).stringValue
+            } else {
+                raw = desc.stringValue
+            }
+            if let raw {
+                // Resolve a four-char code to its enumerator name; otherwise the
+                // value is already the readable name — either way, no quotes.
+                return enumDef.enumerators.first { $0.code == raw }?.name ?? raw
+            }
+        }
+
+        return describeResult(desc)
+    }
+
     // MARK: - Test runner
 
     func runTests(pathFinder: SDEFPathFinder) -> [LintFinding] {
@@ -2121,7 +2154,7 @@ struct DynamicTester {
             if currentValue.descriptorType == AEConstants.typeObjectSpecifier { continue }
             if currentValue.descriptorType == AEConstants.typeAEList { continue }
 
-            let setCmd = "set \(prop.name) of \(containerPath) to \(describeResult(currentValue))"
+            let setCmd = "set \(prop.name) of \(containerPath) to \(setValueLiteral(currentValue, prop: prop))"
             do {
                 try sendSet(propSpec, value: currentValue, command: setCmd)
                 successCount += 1
@@ -2993,7 +3026,7 @@ struct DynamicTester {
                 let origBool = originalValue.booleanValue
                 let newBool = !origBool
                 let newValue = NSAppleEventDescriptor(boolean: newBool)
-                let setCmd = "set \(prop.name) of \(elemPath) to \"\(newBool)\""
+                let setCmd = "set \(prop.name) of \(elemPath) to \(newBool)"
 
                 do {
                     // Set new value
@@ -3015,7 +3048,7 @@ struct DynamicTester {
                     }
 
                     // Restore original
-                    try sendSet(propSpec, value: originalValue, command: "set \(prop.name) of \(elemPath) to \"\(origBool)\"")
+                    try sendSet(propSpec, value: originalValue, command: "set \(prop.name) of \(elemPath) to \(origBool)")
                 } catch {
                     // If set fails, that's fine — just means the property isn't truly writable
                     continue
