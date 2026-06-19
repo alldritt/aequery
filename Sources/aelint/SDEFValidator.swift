@@ -547,20 +547,20 @@ struct SDEFValidator {
             }
         }
 
-        // Check expected application elements (window, document)
+        // Check expected application elements (window, document). Only expect
+        // an element when the app actually defines the corresponding class — an
+        // app with no 'document' class (e.g. a browser like Google Chrome) is
+        // not expected to expose 'document' elements.
         let allElems = dictionary.allElements(for: appClass)
         let elemTypes = Set(allElems.map { $0.type.lowercased() })
-        if !elemTypes.contains("window") {
-            findings.append(LintFinding(
-                .info, category: "standard-suite",
-                message: "Application class does not declare 'window' elements"
-            ))
-        }
-        if !elemTypes.contains("document") {
-            findings.append(LintFinding(
-                .info, category: "standard-suite",
-                message: "Application class does not declare 'document' elements"
-            ))
+        for typeName in ["window", "document"] {
+            guard dictionary.findClass(typeName) != nil else { continue }
+            if !elemTypes.contains(typeName) {
+                findings.append(LintFinding(
+                    .info, category: "standard-suite",
+                    message: "Application class does not declare '\(typeName)' elements"
+                ))
+            }
         }
 
         // Check for standard commands
