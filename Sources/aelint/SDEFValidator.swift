@@ -258,12 +258,14 @@ struct SDEFValidator {
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
                     if systemTypes.isSystemType(name) { continue }
+                    // A raw four-character OSType code (e.g. Finder's "ICN#",
+                    // "il32") is a valid type reference with no named class, so
+                    // it isn't a defect.
+                    if isRawTypeCode(name) { continue }
                     findings.append(LintFinding(
                         .info, category: "undefined-type",
                         message: "Property '\(prop.name)' in class '\(cls.name)' has type '\(name)' which is not defined in the SDEF",
-                        context: isRawTypeCode(name)
-                            ? "Raw four-character type code"
-                            : "Not defined in this SDEF or any system SDEF"
+                        context: "Not defined in this SDEF or any system SDEF"
                     ))
                 }
             }
@@ -498,12 +500,13 @@ struct SDEFValidator {
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
                     if systemTypes.isSystemType(name) { continue }
+                    // A raw four-character OSType code is a valid type
+                    // reference with no named class, so it isn't a defect.
+                    if isRawTypeCode(name) { continue }
                     findings.append(LintFinding(
                         .info, category: "undefined-command-type",
                         message: "Command '\(cmd.name)' references type '\(name)' which is not defined in the SDEF",
-                        context: isRawTypeCode(name)
-                            ? "Raw four-character type code"
-                            : "Not defined in this SDEF or any system SDEF"
+                        context: "Not defined in this SDEF or any system SDEF"
                     ))
                 }
             }
