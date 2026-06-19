@@ -360,16 +360,42 @@ struct SDEFValidator {
     private func checkNonStandardWellKnownTerms() -> [LintFinding] {
         var findings: [LintFinding] = []
 
+        // Gather every name each well-known code is given across the whole
+        // dictionary. This distinguishes a uniform non-standard choice (a
+        // deliberate, internally coherent convention) from an inconsistent one
+        // — the same code mapped to several names. AppleScript keeps a single
+        // code→name mapping per dictionary, so an inconsistent mapping makes
+        // its reverse lookup (decompiling a raw Apple Event) ambiguous.
+        // Keyed by code, then by lowercased name → original-cased name, so we
+        // dedup case-insensitively (AppleScript terms are case-insensitive)
+        // while preserving the dictionary's own spelling for the message.
+        var namesByCode: [String: [String: String]] = [:]
+        for cls in dictionary.classes.values {
+            for prop in dictionary.allProperties(for: cls) {
+                guard Self.wellKnownCodes[prop.code] != nil else { continue }
+                namesByCode[prop.code, default: [:]][prop.name.lowercased()] = prop.name
+            }
+        }
+
         for cls in dictionary.classes.values {
             let allProps = dictionary.allProperties(for: cls)
             for prop in allProps {
-                if let expectedName = Self.wellKnownCodes[prop.code] {
-                    if prop.name.lowercased() != expectedName.lowercased() {
-                        findings.append(LintFinding(
-                            .warning, category: "non-standard-term",
-                            message: "Property code '\(prop.code)' in class '\(cls.name)' uses name '\(prop.name)' instead of standard '\(expectedName)'"
-                        ))
-                    }
+                guard let expectedName = Self.wellKnownCodes[prop.code] else { continue }
+                if prop.name.lowercased() == expectedName.lowercased() { continue }
+
+                let distinctNames = namesByCode[prop.code] ?? [:]
+                if distinctNames.count > 1 {
+                    let nameList = distinctNames.values.sorted().joined(separator: ", ")
+                    findings.append(LintFinding(
+                        .error, category: "non-standard-term",
+                        message: "Property code '\(prop.code)' in class '\(cls.name)' uses name '\(prop.name)' instead of standard '\(expectedName)'",
+                        context: "Code '\(prop.code)' is mapped to multiple names in this dictionary (\(nameList)); AppleScript's reverse mapping when decompiling scripts is ambiguous"
+                    ))
+                } else {
+                    findings.append(LintFinding(
+                        .warning, category: "non-standard-term",
+                        message: "Property code '\(prop.code)' in class '\(cls.name)' uses name '\(prop.name)' instead of standard '\(expectedName)'"
+                    ))
                 }
             }
         }
