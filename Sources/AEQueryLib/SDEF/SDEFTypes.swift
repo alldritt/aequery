@@ -2,6 +2,7 @@ import Foundation
 
 public struct ScriptingDictionary {
     public var classes: [String: ClassDef] = [:]     // keyed by lowercase name
+    public var recordTypes: [String: ClassDef] = [:] // keyed by lowercase name (SDEF <record-type>)
     public var enumerations: [String: EnumDef] = [:] // keyed by lowercase name
     public var commands: [String: CommandDef] = [:]   // keyed by lowercase name
     public var suiteNames: [String] = []              // suite names in order
@@ -134,6 +135,13 @@ public struct ScriptingDictionary {
 
     public func findEnumeration(_ name: String) -> EnumDef? {
         enumerations[name.lowercased()]
+    }
+
+    /// Find a record-type definition by name. SDEF `<record-type>` elements
+    /// (e.g. Numbers' "print settings", "export options") declare record
+    /// structures that commands and properties may reference as a type.
+    public func findRecordType(_ name: String) -> ClassDef? {
+        recordTypes[name.lowercased()]
     }
 
     /// Decompose a composite type string into its constituent base type names.

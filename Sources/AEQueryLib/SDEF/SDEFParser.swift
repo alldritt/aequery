@@ -116,6 +116,14 @@ public struct SDEFParser {
             dictionary.mergeExtension(into: extends, properties: properties, elements: elements)
         }
 
+        // Parse record-types (e.g. Numbers' "print settings", "export options").
+        // Structurally these are name + code + properties, so reuse ClassDef.
+        for node in try suite.nodes(forXPath: "record-type") {
+            guard let element = node as? XMLElement else { continue }
+            let recordDef = try parseClass(element, suiteHidden: suiteHidden)
+            dictionary.recordTypes[recordDef.name.lowercased()] = recordDef
+        }
+
         // Parse enumerations
         for node in try suite.nodes(forXPath: "enumeration") {
             guard let element = node as? XMLElement else { continue }

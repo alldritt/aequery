@@ -244,6 +244,7 @@ struct SDEFValidator {
                     if builtinTypes.contains(lower) { continue }
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
+                    if dictionary.findRecordType(name) != nil { continue }
                     findings.append(LintFinding(
                         .info, category: "undefined-type",
                         message: "Property '\(prop.name)' in class '\(cls.name)' has type '\(name)' which is not defined in the SDEF",
@@ -480,6 +481,7 @@ struct SDEFValidator {
                     if builtinTypes.contains(lower) { continue }
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
+                    if dictionary.findRecordType(name) != nil { continue }
                     findings.append(LintFinding(
                         .info, category: "undefined-command-type",
                         message: "Command '\(cmd.name)' references type '\(name)' which is not defined in the SDEF",

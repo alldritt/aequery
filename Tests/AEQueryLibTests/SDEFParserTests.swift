@@ -160,6 +160,38 @@ struct SDEFParserTests {
         #expect(enumDef?.enumerators[0].code == "yes ")
     }
 
+    @Test func testRecordType() throws {
+        // Mirrors Numbers, where commands reference record-types (e.g. "print
+        // settings", "export options") as parameter types. These must be parsed
+        // and resolvable so they aren't reported as undefined type references.
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <record-type name="print settings" code="pset">
+                    <property name="copies" code="lwcp" type="integer"/>
+                    <property name="collating" code="lwcl" type="boolean"/>
+                </record-type>
+                <command name="print" code="aevtpdoc">
+                    <direct-parameter type="any"/>
+                    <parameter name="with properties" code="prdt" type="print settings"/>
+                </command>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+        let record = dict.findRecordType("print settings")
+        #expect(record != nil)
+        #expect(record?.code == "pset")
+        #expect(record?.properties.count == 2)
+        // Case-insensitive lookup, matching class/enumeration behaviour.
+        #expect(dict.findRecordType("PRINT SETTINGS") != nil)
+        // Record-types are kept separate from classes.
+        #expect(dict.findClass("print settings") == nil)
+    }
+
     @Test func testHiddenSuitePropagates() throws {
         let sdef = """
         <?xml version="1.0" encoding="UTF-8"?>
