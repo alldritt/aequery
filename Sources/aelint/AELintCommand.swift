@@ -8,7 +8,7 @@ struct AELintCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "aelint",
         abstract: "Validate and test a scriptable application's scripting interface.",
-        version: "0.1.0"
+        version: "0.2.0"
     )
 
     @Argument(help: "The application name to validate, e.g. 'Finder'")
