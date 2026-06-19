@@ -85,4 +85,37 @@ struct ObjectSpecifierBuilderTests {
 
         #expect(spec.descriptorType == FourCharCode("obj "))
     }
+
+    /// Reads back the four-char ordinal code from a `.byOrdinal` specifier.
+    private func ordinalCode(of predicate: AEQueryLib.Predicate) throws -> String {
+        let step = ResolvedStep(name: "windows", kind: .element, code: "cwin", predicates: [predicate])
+        let spec = builder.buildStep(step, container: .null())
+
+        #expect(spec.descriptorType == FourCharCode("obj "))
+        // Key form must be absolute position for an ordinal specifier.
+        let form = try #require(spec.forKeyword(AEConstants.keyAEKeyForm))
+        #expect(form.enumCodeValue == AEConstants.formAbsolutePosition)
+
+        let keyData = try #require(spec.forKeyword(AEConstants.keyAEKeyData))
+        #expect(keyData.descriptorType == AEConstants.typeAbsoluteOrdinal)
+        let bytes = keyData.data
+        #expect(bytes.count == 4)
+        // typeAbsoluteOrdinal stores the code as a native-endian OSType (the AE
+        // Manager byte-swaps it on the wire), so read it back the same way.
+        let value = bytes.withUnsafeBytes { $0.load(as: FourCharCode.self) }
+        return value.stringValue
+    }
+
+    // Regression: AppleScript's `some <element>` maps to Apple's kAEAny ordinal,
+    // whose code is 'any ' (a-n-y-space). It was previously mis-defined as 'sran',
+    // which every app rejects — so dynamic `some` access always falsely failed.
+    @Test func testSomeOrdinalUsesKAEAny() throws {
+        let code = try ordinalCode(of: AEQueryLib.Predicate.byOrdinal(.some))
+        #expect(code == "any ")
+    }
+
+    @Test func testMiddleOrdinalCode() throws {
+        let code = try ordinalCode(of: AEQueryLib.Predicate.byOrdinal(.middle))
+        #expect(code == "midd")
+    }
 }

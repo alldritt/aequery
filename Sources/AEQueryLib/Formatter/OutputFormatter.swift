@@ -261,7 +261,7 @@ public struct OutputFormatter {
         case "indx":
             if case .string(let s) = seld {
                 // Ordinals: all, last, first, middle, some — no predicate
-                if s == "all " || s == "last" || s == "firs" || s == "midd" || s == "sran" {
+                if s == "all " || s == "last" || s == "firs" || s == "midd" || s == "any " {
                     return ""
                 }
             }

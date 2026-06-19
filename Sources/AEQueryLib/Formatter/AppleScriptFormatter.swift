@@ -225,7 +225,7 @@ public struct AppleScriptFormatter {
                 if s == "last" { return "last \(className)" }
                 if s == "firs" { return "first \(className)" }
                 if s == "midd" { return "middle \(className)" }
-                if s == "sran" { return "some \(className)" }
+                if s == "any " { return "some \(className)" }
             }
             if case .integer(let n) = seld {
                 if n == -1 {
@@ -267,7 +267,7 @@ public struct AppleScriptFormatter {
                 if s == "last" { return "last \(classRef)" }
                 if s == "firs" { return "first \(classRef)" }
                 if s == "midd" { return "middle \(classRef)" }
-                if s == "sran" { return "some \(classRef)" }
+                if s == "any " { return "some \(classRef)" }
             }
             if case .integer(let n) = seld {
                 if n == -1 {

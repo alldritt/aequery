@@ -57,7 +57,7 @@ public enum AEConstants {
     public static let kAEFirst = FourCharCode("firs")
     public static let kAELast = FourCharCode("last")
     public static let kAEMiddle = FourCharCode("midd")
-    public static let kAEAny = FourCharCode("sran")
+    public static let kAEAny = FourCharCode("any ")
 
     // Object specifier keys
     public static let keyAEDesiredClass = FourCharCode("want")
