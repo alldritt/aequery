@@ -44,6 +44,12 @@ struct AELintCommand: ParsableCommand {
     @Flag(name: .long, help: "Print SDEF dictionary summary and exit")
     var summary: Bool = false
 
+    @Option(name: .long, help: "Exclude a property from dynamic tests (repeatable). Format: 'property' or 'Class.property', e.g. 'entire contents' or 'container.entire contents'. Added to the built-in defaults.")
+    var exclude: [String] = []
+
+    @Flag(name: .long, help: "Disable the built-in default property exclusions (e.g. Finder's 'entire contents', which can hang the app)")
+    var noDefaultExcludes: Bool = false
+
     func run() throws {
         // Load SDEF
         let dictionary: ScriptingDictionary
@@ -79,7 +85,8 @@ struct AELintCommand: ParsableCommand {
         if dynamic {
             let timer = EventTimer()
             eventTimer = timer
-            let tester = DynamicTester(dictionary: dictionary, appName: appName, maxDepth: maxDepth, log: log, timer: timer, timeout: timeout)
+            let exclusions = PropertyExclusions.build(userTokens: exclude, includeDefaults: !noDefaultExcludes)
+            let tester = DynamicTester(dictionary: dictionary, appName: appName, bundleID: appInfo.bundleID, maxDepth: maxDepth, log: log, timer: timer, timeout: timeout, exclusions: exclusions)
             findings.append(contentsOf: tester.runTests(pathFinder: pathFinder))
             coverageTracker = tester.coverage
 
@@ -177,6 +184,7 @@ struct AELintCommand: ParsableCommand {
 
         // Collect categories and their summary findings
         let categories: [(prefix: String, label: String)] = [
+            ("dynamic-skip", "Excluded properties"),
             ("dynamic-property", "Application properties"),
             ("dynamic-count", "Element counting"),
             ("dynamic-element-prop", "Element properties"),

@@ -50,24 +50,67 @@ class CoverageTracker {
 struct DynamicTester {
     let dictionary: ScriptingDictionary
     let appName: String
+    let appBundleID: String?
     let maxDepth: Int
     let log: Bool
     let timer: EventTimer
     let timeout: Int
     let coverage: CoverageTracker
+    let exclusions: PropertyExclusions
 
     private let sender = AppleEventSender()
     private let builder: ObjectSpecifierBuilder
 
-    init(dictionary: ScriptingDictionary, appName: String, maxDepth: Int, log: Bool = false, timer: EventTimer = EventTimer(), timeout: Int = 10) {
+    /// Max number of sub-properties/record-fields to probe per object when
+    /// chaining `property of property` / `field of property` specifiers.
+    private let propertyChainFanout = 6
+    /// How many *extra* levels to recurse for `property of property` chains
+    /// (0 = probe each object's sub-properties but don't chain a third level;
+    /// 1 = also probe `property of property of property`). Kept at 0 by default
+    /// to bound event volume against slow apps.
+    private let maxChainDepth = 0
+
+    init(dictionary: ScriptingDictionary, appName: String, bundleID: String? = nil, maxDepth: Int, log: Bool = false, timer: EventTimer = EventTimer(), timeout: Int = 10, exclusions: PropertyExclusions = PropertyExclusions(rules: [])) {
         self.dictionary = dictionary
         self.appName = appName
+        self.appBundleID = bundleID
         self.maxDepth = maxDepth
         self.log = log
         self.timer = timer
         self.timeout = timeout
         self.coverage = CoverageTracker()
+        self.exclusions = exclusions
         self.builder = ObjectSpecifierBuilder(dictionary: dictionary)
+    }
+
+    // MARK: - Property exclusions
+
+    /// Properties of a class that are eligible to be read dynamically — i.e. all
+    /// properties minus those matched by the active exclusion list. Hidden and
+    /// write-only filtering is still applied by each caller as before.
+    private func testableProperties(of classDef: ClassDef) -> [PropertyDef] {
+        dictionary.allProperties(for: classDef).filter {
+            !exclusions.isExcluded(property: $0.name, className: classDef.name, bundleID: appBundleID)
+        }
+    }
+
+    /// One info finding per distinct excluded property that actually appears in
+    /// the dictionary, so dropped coverage is explained rather than silent.
+    private func excludedPropertyFindings() -> [LintFinding] {
+        var hits: [String: Set<String>] = [:]  // property name -> class names
+        for cls in dictionary.classes.values where !cls.hidden {
+            for prop in dictionary.allProperties(for: cls) where !prop.hidden {
+                if exclusions.isExcluded(property: prop.name, className: cls.name, bundleID: appBundleID) {
+                    hits[prop.name, default: []].insert(cls.name)
+                }
+            }
+        }
+        return hits.sorted { $0.key < $1.key }.map { name, classes in
+            LintFinding(
+                .info, category: "dynamic-skip",
+                message: "Skipping property '\(name)' (excluded) on: \(classes.sorted().joined(separator: ", "))"
+            )
+        }
     }
 
     // MARK: - Apple Event wrappers with logging and timing
@@ -336,6 +379,9 @@ struct DynamicTester {
             return findings
         }
 
+        // Report any properties skipped by the exclusion list up front.
+        findings.append(contentsOf: excludedPropertyFindings())
+
         let phases: [(String, () -> [LintFinding])] = [
             ("Application properties", testApplicationProperties),
             ("Element counting", testApplicationElements),
@@ -517,7 +563,7 @@ struct DynamicTester {
             return findings
         }
 
-        let allProps = dictionary.allProperties(for: appClass)
+        let allProps = testableProperties(of: appClass)
         var successCount = 0
         var failCount = 0
 
@@ -643,7 +689,7 @@ struct DynamicTester {
                 container: NSAppleEventDescriptor.null()
             )
 
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             var propSuccess = 0
             var propFail = 0
 
@@ -718,7 +764,7 @@ struct DynamicTester {
             forms.append("by index")
 
             // Test by-name: get name of first, then access by that name
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             let hasNameProp = allProps.contains { $0.code == "pnam" }
 
             if hasNameProp {
@@ -941,7 +987,7 @@ struct DynamicTester {
         path: String,
         findings: inout [LintFinding]
     ) {
-        let allProps = dictionary.allProperties(for: classDef)
+        let allProps = testableProperties(of: classDef)
 
         for prop in allProps {
             if prop.hidden { continue }
@@ -960,7 +1006,7 @@ struct DynamicTester {
             if reply.descriptorType == AEConstants.typeObjectSpecifier {
                 testPropertyOfProperty(
                     propName: prop.name, propType: prop.type, propSpec: propSpec,
-                    path: path, findings: &findings
+                    path: path, chainDepth: 0, findings: &findings
                 )
                 testElementOfProperty(
                     propName: prop.name, propType: prop.type, propSpec: propSpec,
@@ -970,6 +1016,11 @@ struct DynamicTester {
                 testListAccess(
                     propName: prop.name, propSpec: propSpec, listReply: reply,
                     path: path, findings: &findings
+                )
+            } else if reply.descriptorType == typeType(for: "reco") {
+                testRecordFieldAccess(
+                    propName: prop.name, propType: prop.type, propSpec: propSpec,
+                    recordReply: reply, path: path, findings: &findings
                 )
             }
         }
@@ -982,23 +1033,142 @@ struct DynamicTester {
         propType: String?,
         propSpec: NSAppleEventDescriptor,
         path: String,
+        chainDepth: Int,
         findings: inout [LintFinding]
     ) {
-        let nameOfPropSpec = builder.buildPropertySpecifier(code: "pnam", container: propSpec)
-        let cmd = "get name of \(propName) of \(path) of \(appRef)"
+        let chainPath = "\(propName) of \(path)"
 
-        do {
-            let result = try sendGet(nameOfPropSpec, command: cmd)
-            let nameStr = result.stringValue ?? "(non-string)"
+        // When the property's declared type resolves to a class, probe that
+        // class's real readable properties. Otherwise fall back to `name`.
+        guard let typeName = propType,
+              let targetClass = dictionary.findClass(typeName) else {
+            let nameOfPropSpec = builder.buildPropertySpecifier(code: "pnam", container: propSpec)
+            let cmd = "get name of \(chainPath) of \(appRef)"
+            do {
+                let result = try sendGet(nameOfPropSpec, command: cmd)
+                let nameStr = result.stringValue ?? "(non-string)"
+                findings.append(LintFinding(
+                    .info, category: "dynamic-chain",
+                    message: "property-of-property: name of \(chainPath) = \(nameStr)"
+                ))
+            } catch {
+                findings.append(LintFinding(
+                    .warning, category: "dynamic-chain",
+                    message: "property-of-property unsupported: name of \(chainPath): \(error.localizedDescription)",
+                    context: cmd
+                ))
+            }
+            return
+        }
+
+        let subProps = testableProperties(of: targetClass)
+            .filter { !$0.hidden && $0.access != .writeOnly }
+            .prefix(propertyChainFanout)
+
+        var supported: [String] = []
+        var unsupported: [String] = []
+
+        for sub in subProps {
+            let subSpec = builder.buildPropertySpecifier(code: sub.code, container: propSpec)
+            let cmd = "get \(sub.name) of \(chainPath) of \(appRef)"
+
+            let reply: NSAppleEventDescriptor
+            do {
+                reply = try sendGet(subSpec, command: cmd)
+            } catch {
+                unsupported.append(sub.name)
+                continue
+            }
+            supported.append(sub.name)
+            coverage.recordProperty(targetClass.name, sub.name)
+
+            // Recurse one more level when the sub-property is itself a reference.
+            if chainDepth < maxChainDepth,
+               reply.descriptorType == AEConstants.typeObjectSpecifier {
+                testPropertyOfProperty(
+                    propName: sub.name, propType: sub.type, propSpec: subSpec,
+                    path: chainPath, chainDepth: chainDepth + 1, findings: &findings
+                )
+            }
+        }
+
+        if !supported.isEmpty {
             findings.append(LintFinding(
                 .info, category: "dynamic-chain",
-                message: "property-of-property: name of \(propName) of \(path) = \(nameStr)"
+                message: "property-of-property: \(chainPath) (\(targetClass.name)) supports: \(supported.joined(separator: ", "))"
             ))
-        } catch {
+        }
+        if !unsupported.isEmpty {
             findings.append(LintFinding(
                 .warning, category: "dynamic-chain",
-                message: "property-of-property unsupported: name of \(propName) of \(path): \(error.localizedDescription)",
-                context: cmd
+                message: "property-of-property unsupported on \(chainPath) (\(targetClass.name)): \(unsupported.joined(separator: ", "))"
+            ))
+        }
+    }
+
+    // MARK: - Record-field-of-property
+
+    /// When a property returns a record, verify that individual fields can be
+    /// addressed as `field of property of …`. Cocoa Scripting does not support
+    /// this out of the box, so it's a useful thing to flag.
+    private func testRecordFieldAccess(
+        propName: String,
+        propType: String?,
+        propSpec: NSAppleEventDescriptor,
+        recordReply: NSAppleEventDescriptor,
+        path: String,
+        findings: inout [LintFinding]
+    ) {
+        let keyCount = recordReply.numberOfItems
+        guard keyCount > 0 else { return }
+
+        let chainPath = "\(propName) of \(path)"
+        // Map record key codes back to property names when the type is a class.
+        let targetClass = propType.flatMap { dictionary.findClass($0) }
+
+        var supported: [String] = []
+        var unsupported: [String] = []
+        var probed = 0
+
+        for i in 1...keyCount {
+            let keyword = recordReply.keywordForDescriptor(at: i)
+            guard keyword != 0 else { continue }
+            let keyCode = FourCharCode(keyword).stringValue
+            // Skip synthetic / non-property keys.
+            if keyCode == "pcls" || keyCode == "usrf" { continue }
+
+            let fieldName = targetClass
+                .flatMap { dictionary.allProperties(for: $0).first { $0.code == keyCode }?.name }
+                ?? keyCode
+
+            // Honour the exclusion list for record fields too.
+            let fieldClassName = targetClass?.name ?? ""
+            if exclusions.isExcluded(property: fieldName, className: fieldClassName, bundleID: appBundleID) {
+                continue
+            }
+
+            let fieldSpec = builder.buildPropertySpecifier(code: keyCode, container: propSpec)
+            let cmd = "get \(fieldName) of \(chainPath) of \(appRef)"
+            if testGetItemQuietly(spec: fieldSpec, command: cmd) {
+                supported.append(fieldName)
+            } else {
+                unsupported.append(fieldName)
+            }
+
+            probed += 1
+            if probed >= propertyChainFanout { break }
+        }
+
+        if !supported.isEmpty {
+            findings.append(LintFinding(
+                .info, category: "dynamic-chain",
+                message: "record-field-of-property: \(chainPath) (record of \(keyCount) keys) supports: \(supported.joined(separator: ", "))"
+            ))
+        }
+        if !unsupported.isEmpty {
+            findings.append(LintFinding(
+                .warning, category: "dynamic-chain",
+                message: "record-field-of-property unsupported on \(chainPath): \(unsupported.joined(separator: ", "))"
             ))
         }
     }
@@ -1326,7 +1496,7 @@ struct DynamicTester {
             }
             guard count > 0 else { continue }
 
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             guard allProps.contains(where: { $0.code == "pnam" }) else { continue }
 
             let firstSpec = builder.buildElementWithPredicate(
@@ -1481,7 +1651,7 @@ struct DynamicTester {
         var findings: [LintFinding] = []
         guard let appClass = dictionary.findClass("application") else { return findings }
 
-        let allProps = dictionary.allProperties(for: appClass)
+        let allProps = testableProperties(of: appClass)
         var matchCount = 0
         var mismatchCount = 0
         var uncheckCount = 0
@@ -1686,8 +1856,12 @@ struct DynamicTester {
             guard let parentClass = dictionary.findClass(parentName) else { continue }
 
             // Only test classes that actually inherit from something other than "item"
-            // and where the parent has properties
-            let parentProps = parentClass.properties.filter { !$0.hidden && $0.access != .writeOnly }
+            // and where the parent has properties. Honour the exclusion list,
+            // matched against the child class actually under test.
+            let parentProps = parentClass.properties.filter {
+                !$0.hidden && $0.access != .writeOnly
+                    && !exclusions.isExcluded(property: $0.name, className: elemClass.name, bundleID: appBundleID)
+            }
             guard !parentProps.isEmpty else { continue }
 
             let elementCode = FourCharCode(elemClass.code)
@@ -1919,7 +2093,7 @@ struct DynamicTester {
         readOnlyCount: inout Int,
         findings: inout [LintFinding]
     ) {
-        let allProps = dictionary.allProperties(for: classDef)
+        let allProps = testableProperties(of: classDef)
 
         // Known read-only property codes that should never be set
         let knownReadOnlyCodes: Set<String> = [
@@ -2106,7 +2280,7 @@ struct DynamicTester {
             }
             guard count > 0 else { continue }
 
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             guard allProps.contains(where: { $0.code == "pnam" }) else { continue }
 
             // Get the name of the first element to use as test data
@@ -2254,7 +2428,7 @@ struct DynamicTester {
             guard count >= 2 else { continue }
 
             // Find a numeric property to test with (prefer "index" if available)
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             let numericProp = allProps.first(where: { $0.code == "pidx" })
                 ?? allProps.first(where: {
                     !$0.hidden && $0.access != .writeOnly &&
@@ -2703,7 +2877,7 @@ struct DynamicTester {
             guard count > 0 else { continue }
 
             // Find a readable property (prefer "name", fall back to first readable)
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             let readableProps = allProps.filter { !$0.hidden && $0.access != .writeOnly }
             guard let testProp = readableProps.first(where: { $0.name.lowercased() == "name" }) ?? readableProps.first else { continue }
 
@@ -2798,7 +2972,7 @@ struct DynamicTester {
             let elemPath = "\(elemClass.name) 1 of \(appRef)"
 
             // Find safe boolean properties to test
-            let allProps = dictionary.allProperties(for: elemClass)
+            let allProps = testableProperties(of: elemClass)
             for prop in allProps {
                 if prop.hidden { continue }
                 if prop.access == .readOnly || prop.access == .writeOnly { continue }
@@ -2934,7 +3108,7 @@ struct DynamicTester {
         invalidCount: inout Int,
         findings: inout [LintFinding]
     ) {
-        let allProps = dictionary.allProperties(for: classDef)
+        let allProps = testableProperties(of: classDef)
 
         for prop in allProps {
             if prop.hidden { continue }
