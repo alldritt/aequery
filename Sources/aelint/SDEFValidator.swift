@@ -5,6 +5,18 @@ struct SDEFValidator {
     let dictionary: ScriptingDictionary
     let appName: String
 
+    // Types declared by macOS's system-wide SDEF files (Intrinsics, Cocoa
+    // Standard, OpenScripting Compatibility). Used to verify, rather than
+    // guess, that a dangling type reference is system-defined.
+    let systemTypes = SystemTypeRegistry()
+
+    /// Whether an unresolved type name is a raw four-character OSType code
+    /// (e.g. Finder's `ICN#`, `il32`) rather than a named type. These are
+    /// valid type references even though they have no named definition.
+    private func isRawTypeCode(_ name: String) -> Bool {
+        name.count == 4 && name.contains { !$0.isLetter }
+    }
+
     // Well-known 4CC codes and their expected standard terms
     private static let wellKnownCodes: [String: String] = [
         "pnam": "name",
@@ -245,10 +257,13 @@ struct SDEFValidator {
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
+                    if systemTypes.isSystemType(name) { continue }
                     findings.append(LintFinding(
                         .info, category: "undefined-type",
                         message: "Property '\(prop.name)' in class '\(cls.name)' has type '\(name)' which is not defined in the SDEF",
-                        context: "May be a system-defined type"
+                        context: isRawTypeCode(name)
+                            ? "Raw four-character type code"
+                            : "Not defined in this SDEF or any system SDEF"
                     ))
                 }
             }
@@ -482,10 +497,13 @@ struct SDEFValidator {
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
+                    if systemTypes.isSystemType(name) { continue }
                     findings.append(LintFinding(
                         .info, category: "undefined-command-type",
                         message: "Command '\(cmd.name)' references type '\(name)' which is not defined in the SDEF",
-                        context: "May be a system-defined type"
+                        context: isRawTypeCode(name)
+                            ? "Raw four-character type code"
+                            : "Not defined in this SDEF or any system SDEF"
                     ))
                 }
             }
