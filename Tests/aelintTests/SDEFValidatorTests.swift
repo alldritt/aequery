@@ -17,6 +17,15 @@ struct SDEFValidatorTests {
         findings.filter { $0.category == category }
     }
 
+    /// Run only the reachability pass (which needs an `SDEFPathFinder`, so it's
+    /// invoked separately from `validate()`).
+    private func lintReachability(_ sdef: String, maxDepth: Int = 6) throws -> [LintFinding] {
+        let dict = try SDEFParser().parse(xmlString: sdef)
+        let validator = SDEFValidator(dictionary: dict, appName: "TestApp")
+        let pathFinder = SDEFPathFinder(dictionary: dict)
+        return validator.validateReachability(pathFinder: pathFinder, maxDepth: maxDepth)
+    }
+
     // MARK: - unused-enum
 
     @Test func unusedEnumFlagsUnreferencedEnumeration() throws {
@@ -558,5 +567,114 @@ struct SDEFValidatorTests {
         let empty = try categories(lint(sdef), "empty-class")
         #expect(empty.count == 1)
         #expect(empty.first?.message.contains("hollow") == true)
+    }
+
+    // MARK: - reachability (unreachable / inferred-reachable)
+
+    @Test func reachableViaContainmentIsNotFlagged() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <element type="document"/>
+                </class>
+                <class name="document" code="docu">
+                    <property name="name" code="pnam" type="text"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let findings = try lintReachability(sdef)
+        #expect(categories(findings, "unreachable").isEmpty)
+        #expect(categories(findings, "inferred-reachable").isEmpty)
+    }
+
+    @Test func disconnectedClassIsUnreachable() throws {
+        // 'island' is defined but nothing contains it, it's not a command/
+        // property type, and it has no inheritance link to a reachable class.
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="island" code="isld">
+                    <property name="size" code="psiz" type="integer"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let unreachable = try categories(lintReachability(sdef), "unreachable")
+        #expect(unreachable.count == 1)
+        #expect(unreachable.first?.severity == .warning)
+        #expect(unreachable.first?.message.contains("island") == true)
+    }
+
+    @Test func subclassOfReachableParentIsInferredReachable() throws {
+        // 'project document' has no containment path of its own, but its parent
+        // 'document' is reachable, so it is presumed reachable through the
+        // parent's element accessor — reported as inferred-reachable, not
+        // unreachable.
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <element type="document"/>
+                </class>
+                <class name="document" code="docu">
+                    <property name="name" code="pnam" type="text"/>
+                </class>
+                <class name="project document" code="pdoc" inherits="document">
+                    <property name="root" code="prot" type="text"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let findings = try lintReachability(sdef)
+        #expect(categories(findings, "unreachable").isEmpty)
+        let inferred = categories(findings, "inferred-reachable")
+        #expect(inferred.count == 1)
+        #expect(inferred.first?.severity == .info)
+        #expect(inferred.first?.message.contains("project document") == true)
+        #expect(inferred.first?.message.contains("document") == true)
+    }
+
+    @Test func classReferencedAsCommandResultTypeIsExempt() throws {
+        // 'swatch color' is reachable only as a command result type (not through
+        // any element/property containment), so the type-reference exemption
+        // keeps it from being flagged unreachable.
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <command name="make swatch" code="MyApmksw">
+                    <result type="swatch color"/>
+                </command>
+                <class name="swatch color" code="swcl">
+                    <property name="name" code="pnam" type="text"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let findings = try lintReachability(sdef)
+        #expect(categories(findings, "unreachable").isEmpty)
+        #expect(categories(findings, "inferred-reachable").isEmpty)
+    }
+
+    @Test func hiddenClassIsNeverUnreachable() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="secret" code="scrt" hidden="yes">
+                    <property name="size" code="psiz" type="integer"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lintReachability(sdef), "unreachable").isEmpty)
     }
 }
