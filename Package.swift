@@ -35,5 +35,9 @@ let package = Package(
             name: "AEQueryLibTests",
             dependencies: ["AEQueryLib"]
         ),
+        .testTarget(
+            name: "aelintTests",
+            dependencies: ["aelint", "AEQueryLib"]
+        ),
     ]
 )
