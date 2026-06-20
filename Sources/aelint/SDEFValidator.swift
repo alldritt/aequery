@@ -257,6 +257,7 @@ struct SDEFValidator {
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
+                    if dictionary.findValueType(name) != nil { continue }
                     if systemTypes.isSystemType(name) { continue }
                     // A raw four-character OSType code (e.g. Finder's "ICN#",
                     // "il32") is a valid type reference with no named class, so
@@ -408,14 +409,19 @@ struct SDEFValidator {
     private func checkUnusedEnumerations() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Collect all types referenced by properties and command parameters,
+        // Collect every enumeration referenced by a property or command,
         // decomposing `list of X` and `A | B` / `A / B` composite types so an
-        // enum referenced only via such a form isn't reported as unused.
-        var referencedTypes = Set<String>()
+        // enum referenced only via such a form isn't reported as unused. Each
+        // component is resolved through `findEnumeration`, which follows both
+        // name and four-character-code references (see sdef(5)), so an enum
+        // referenced solely by its code still counts as used.
+        var referencedEnums = Set<String>()
         func record(_ type: String?) {
             guard let type else { return }
             for name in ScriptingDictionary.componentTypeNames(of: type) {
-                referencedTypes.insert(name.lowercased())
+                if let enumDef = dictionary.findEnumeration(name) {
+                    referencedEnums.insert(enumDef.name.lowercased())
+                }
             }
         }
         for cls in dictionary.classes.values {
@@ -433,7 +439,7 @@ struct SDEFValidator {
 
         for enumDef in dictionary.enumerations.values {
             if enumDef.hidden { continue }
-            if !referencedTypes.contains(enumDef.name.lowercased()) {
+            if !referencedEnums.contains(enumDef.name.lowercased()) {
                 findings.append(LintFinding(
                     .info, category: "unused-enum",
                     message: "Enumeration '\(enumDef.name)' is not referenced by any property or command"
@@ -525,6 +531,7 @@ struct SDEFValidator {
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
+                    if dictionary.findValueType(name) != nil { continue }
                     if systemTypes.isSystemType(name) { continue }
                     // A raw four-character OSType code is a valid type
                     // reference with no named class, so it isn't a defect.

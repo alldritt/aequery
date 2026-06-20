@@ -3,6 +3,7 @@ import Foundation
 public struct ScriptingDictionary {
     public var classes: [String: ClassDef] = [:]     // keyed by lowercase name
     public var recordTypes: [String: ClassDef] = [:] // keyed by lowercase name (SDEF <record-type>)
+    public var valueTypes: [String: ClassDef] = [:]  // keyed by lowercase name (SDEF <value-type>)
     public var enumerations: [String: EnumDef] = [:] // keyed by lowercase name
     public var commands: [String: CommandDef] = [:]   // keyed by lowercase name
     public var suiteNames: [String] = []              // suite names in order
@@ -53,7 +54,10 @@ public struct ScriptingDictionary {
         if let singular = pluralToSingular[lower], let cls = classes[singular] {
             return cls
         }
-        return nil
+        // A type/class reference may use a four-character code in place of a
+        // name (see sdef(5): the `type` attribute resolves against the name OR
+        // code of a class). Fall back to a code lookup when the name misses.
+        return findClassByCode(name)
     }
 
     /// Look up a class by its plural name, returning the singular ClassDef
@@ -134,14 +138,35 @@ public struct ScriptingDictionary {
     }
 
     public func findEnumeration(_ name: String) -> EnumDef? {
-        enumerations[name.lowercased()]
+        if let enumDef = enumerations[name.lowercased()] {
+            return enumDef
+        }
+        // A type reference may name an enumeration by its four-character code
+        // instead of its name (see sdef(5)).
+        return findEnumerationByCode(name)
     }
 
     /// Find a record-type definition by name. SDEF `<record-type>` elements
     /// (e.g. Numbers' "print settings", "export options") declare record
     /// structures that commands and properties may reference as a type.
     public func findRecordType(_ name: String) -> ClassDef? {
-        recordTypes[name.lowercased()]
+        if let recordDef = recordTypes[name.lowercased()] {
+            return recordDef
+        }
+        // As with classes and enumerations, a record-type may be referenced by
+        // its four-character code.
+        return findRecordTypeByCode(name)
+    }
+
+    /// Find a value-type definition by name. SDEF `<value-type>` elements
+    /// declare simple basic types (e.g. an "image" backed by NSData) that
+    /// properties and commands may reference as a type.
+    public func findValueType(_ name: String) -> ClassDef? {
+        if let valueDef = valueTypes[name.lowercased()] {
+            return valueDef
+        }
+        // A value-type may likewise be referenced by its four-character code.
+        return findValueTypeByCode(name)
     }
 
     /// Decompose a composite type string into its constituent base type names.
@@ -177,9 +202,53 @@ public struct ScriptingDictionary {
         type.lowercased().contains("list of ")
     }
 
-    /// Find a class definition by its four-character code
+    /// Canonicalize a four-character (or eight-character) OSType code so the two
+    /// spellings sdef(5) permits compare equal: a literal Mac OS Roman string
+    /// such as `"eGrT"`, and its hexadecimal form such as `"0x65477254"`. A
+    /// string without a `0x` prefix is returned unchanged; codes are
+    /// case-sensitive, so no case folding is applied.
+    public static func canonicalCode(_ code: String) -> String {
+        guard code.hasPrefix("0x") || code.hasPrefix("0X") else { return code }
+        let hex = code.dropFirst(2)
+        guard !hex.isEmpty, hex.count % 2 == 0 else { return code }
+        var bytes: [UInt8] = []
+        var idx = hex.startIndex
+        while idx < hex.endIndex {
+            let next = hex.index(idx, offsetBy: 2)
+            guard let byte = UInt8(hex[idx..<next], radix: 16) else { return code }
+            bytes.append(byte)
+            idx = next
+        }
+        // Mac OS Roman maps every byte value, so decoding never fails.
+        return String(bytes: bytes, encoding: .macOSRoman) ?? code
+    }
+
+    /// Find a class definition by its four-character code (accepting either the
+    /// literal or `0x…` hexadecimal spelling).
     public func findClassByCode(_ code: String) -> ClassDef? {
-        classes.values.first { $0.code == code }
+        let canon = Self.canonicalCode(code)
+        return classes.values.first { Self.canonicalCode($0.code) == canon }
+    }
+
+    /// Find an enumeration by its four-character code.
+    public func findEnumerationByCode(_ code: String) -> EnumDef? {
+        let canon = Self.canonicalCode(code)
+        return enumerations.values.first { enumDef in
+            guard let enumCode = enumDef.code else { return false }
+            return Self.canonicalCode(enumCode) == canon
+        }
+    }
+
+    /// Find a record-type by its four-character code.
+    public func findRecordTypeByCode(_ code: String) -> ClassDef? {
+        let canon = Self.canonicalCode(code)
+        return recordTypes.values.first { Self.canonicalCode($0.code) == canon }
+    }
+
+    /// Find a value-type by its four-character code.
+    public func findValueTypeByCode(_ code: String) -> ClassDef? {
+        let canon = Self.canonicalCode(code)
+        return valueTypes.values.first { Self.canonicalCode($0.code) == canon }
     }
 
     /// Find a property definition by its four-character code within a given class (including inherited properties)

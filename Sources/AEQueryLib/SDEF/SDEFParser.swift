@@ -124,6 +124,15 @@ public struct SDEFParser {
             dictionary.recordTypes[recordDef.name.lowercased()] = recordDef
         }
 
+        // Parse value-types (e.g. an "image" backed by NSData). Structurally
+        // they are name + code (+ optional plural), so reuse ClassDef; they
+        // carry no scriptable properties or elements.
+        for node in try suite.nodes(forXPath: "value-type") {
+            guard let element = node as? XMLElement else { continue }
+            let valueDef = try parseClass(element, suiteHidden: suiteHidden)
+            dictionary.valueTypes[valueDef.name.lowercased()] = valueDef
+        }
+
         // Parse enumerations
         for node in try suite.nodes(forXPath: "enumeration") {
             guard let element = node as? XMLElement else { continue }

@@ -192,6 +192,83 @@ struct SDEFParserTests {
         #expect(dict.findClass("print settings") == nil)
     }
 
+    @Test func testTypeReferenceByCode() throws {
+        // sdef(5): a type reference resolves against a class, enumeration, or
+        // record-type by its name OR its four-character code. A property/
+        // parameter may therefore reference a type by code (e.g. type="eGrT")
+        // rather than by name. See aequery issue #7.
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <enumeration name="gradient drawing type" code="eGrT">
+                    <enumerator name="linear" code="eGrL"/>
+                    <enumerator name="radial" code="eGrR"/>
+                </enumeration>
+                <record-type name="print settings" code="pset">
+                    <property name="copies" code="lwcp" type="integer"/>
+                </record-type>
+                <class name="document" code="docu"/>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+
+        // Lookups by name still work, and resolve to the same definition as the
+        // by-code lookup.
+        #expect(dict.findEnumeration("gradient drawing type")?.code == "eGrT")
+        #expect(dict.findEnumeration("eGrT")?.name == "gradient drawing type")
+        #expect(dict.findEnumerationByCode("eGrT")?.name == "gradient drawing type")
+        #expect(dict.findClass("docu")?.name == "document")
+        #expect(dict.findRecordType("pset")?.name == "print settings")
+
+        // The hexadecimal spelling of a code is equivalent to the literal one
+        // ("eGrT" == 0x65477254).
+        #expect(dict.findEnumeration("0x65477254")?.name == "gradient drawing type")
+        #expect(ScriptingDictionary.canonicalCode("0x65477254") == "eGrT")
+        #expect(ScriptingDictionary.canonicalCode("eGrT") == "eGrT")
+
+        // Codes are case-sensitive, unlike names; a wrong-case code does not match.
+        #expect(dict.findEnumeration("egrt") == nil)
+        // A code that matches nothing resolves to nil rather than a stray hit.
+        #expect(dict.findEnumeration("zzzz") == nil)
+    }
+
+    @Test func testValueType() throws {
+        // sdef(5) <value-type>: a simple basic type (no scriptable properties or
+        // elements), e.g. an "image" backed by NSData. Properties/commands may
+        // reference it as a type, by name or by code.
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <value-type name="RGB color" code="cRGB">
+                    <cocoa class="NSColor"/>
+                </value-type>
+                <class name="document" code="docu">
+                    <property name="background" code="pbkg" type="RGB color"/>
+                    <property name="tint" code="ptnt" type="cRGB"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+        let valueType = dict.findValueType("RGB color")
+        #expect(valueType != nil)
+        #expect(valueType?.code == "cRGB")
+        // Resolvable by name (case-insensitive) and by code.
+        #expect(dict.findValueType("rgb color") != nil)
+        #expect(dict.findValueType("cRGB")?.name == "RGB color")
+        #expect(dict.findValueTypeByCode("cRGB")?.name == "RGB color")
+        // Kept separate from classes, record-types, and enumerations.
+        #expect(dict.findClass("RGB color") == nil)
+        #expect(dict.findRecordType("RGB color") == nil)
+    }
+
     @Test func testHiddenSuitePropagates() throws {
         let sdef = """
         <?xml version="1.0" encoding="UTF-8"?>
