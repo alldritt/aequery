@@ -249,6 +249,7 @@ Every finding names a category. The static checks and why each one matters:
 | `unreachable` | warning | No containment path reaches the class from the application root within `--max-depth`. Scripts can't navigate to it; it may be dead or missing an accessor. |
 | `inferred-reachable` | info | The class is reached only through a parent's accessor that can return subclass instances at runtime. Noted in case the app never actually returns that subclass. |
 | `unused-enum` | info | An enumeration isn't referenced by any property or command — either dead weight, or a sign that a property's type is missing. |
+| `unused-value-type` | info | A value-type isn't referenced by any property or command — either dead weight, or a sign that a property's type is missing. |
 | `empty-class` | info | A class has no visible properties or elements. Likely incomplete, or only a placeholder type. |
 | `documentation` | info | Some classes or commands have no description, so dictionary viewers show no help for them. |
 | `hidden-items` | info | Counts the classes, properties, and commands marked hidden. Informational. |

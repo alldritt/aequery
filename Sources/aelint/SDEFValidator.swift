@@ -77,6 +77,7 @@ struct SDEFValidator {
         findings.append(contentsOf: checkMissingPluralNames())
         findings.append(contentsOf: checkNonStandardWellKnownTerms())
         findings.append(contentsOf: checkUnusedEnumerations())
+        findings.append(contentsOf: checkUnusedValueTypes())
         findings.append(contentsOf: checkReservedWordTerms())
         findings.append(contentsOf: checkCommandValidation())
         findings.append(contentsOf: checkStandardSuiteCompliance())
@@ -404,37 +405,45 @@ struct SDEFValidator {
         return findings
     }
 
-    // MARK: - Unused enumerations
+    // MARK: - Unused enumerations and value-types
+
+    /// Every type-name component referenced anywhere a type may appear: class
+    /// and record-type properties, and command direct-parameters, parameters,
+    /// and results. Composite forms (`list of X`, `A | B` / `A / B`) are
+    /// decomposed so a type referenced only via such a form is still counted.
+    /// Returned strings may be names or four-character codes; the caller
+    /// resolves them through the code-aware `find…` helpers.
+    private func referencedTypeComponents() -> [String] {
+        var components: [String] = []
+        func record(_ type: String?) {
+            guard let type else { return }
+            components.append(contentsOf: ScriptingDictionary.componentTypeNames(of: type))
+        }
+        for cls in dictionary.classes.values {
+            for prop in cls.properties { record(prop.type) }
+        }
+        for rec in dictionary.recordTypes.values {
+            for prop in rec.properties { record(prop.type) }
+        }
+        for cmd in dictionary.commands.values {
+            record(cmd.directParameter?.type)
+            for param in cmd.parameters { record(param.type) }
+            record(cmd.result?.type)
+        }
+        return components
+    }
 
     private func checkUnusedEnumerations() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Collect every enumeration referenced by a property or command,
-        // decomposing `list of X` and `A | B` / `A / B` composite types so an
-        // enum referenced only via such a form isn't reported as unused. Each
-        // component is resolved through `findEnumeration`, which follows both
-        // name and four-character-code references (see sdef(5)), so an enum
-        // referenced solely by its code still counts as used.
+        // Resolve each referenced component through `findEnumeration`, which
+        // follows both name and four-character-code references (see sdef(5)),
+        // so an enum referenced solely by its code still counts as used.
         var referencedEnums = Set<String>()
-        func record(_ type: String?) {
-            guard let type else { return }
-            for name in ScriptingDictionary.componentTypeNames(of: type) {
-                if let enumDef = dictionary.findEnumeration(name) {
-                    referencedEnums.insert(enumDef.name.lowercased())
-                }
+        for name in referencedTypeComponents() {
+            if let enumDef = dictionary.findEnumeration(name) {
+                referencedEnums.insert(enumDef.name.lowercased())
             }
-        }
-        for cls in dictionary.classes.values {
-            for prop in cls.properties {
-                record(prop.type)
-            }
-        }
-        for cmd in dictionary.commands.values {
-            record(cmd.directParameter?.type)
-            for param in cmd.parameters {
-                record(param.type)
-            }
-            record(cmd.result?.type)
         }
 
         for enumDef in dictionary.enumerations.values {
@@ -443,6 +452,31 @@ struct SDEFValidator {
                 findings.append(LintFinding(
                     .info, category: "unused-enum",
                     message: "Enumeration '\(enumDef.name)' is not referenced by any property or command"
+                ))
+            }
+        }
+
+        return findings
+    }
+
+    private func checkUnusedValueTypes() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        // As with enumerations, resolve references through the code-aware
+        // `findValueType` so a value-type referenced only by its code counts.
+        var referencedValueTypes = Set<String>()
+        for name in referencedTypeComponents() {
+            if let valueDef = dictionary.findValueType(name) {
+                referencedValueTypes.insert(valueDef.name.lowercased())
+            }
+        }
+
+        for valueDef in dictionary.valueTypes.values {
+            if valueDef.hidden { continue }
+            if !referencedValueTypes.contains(valueDef.name.lowercased()) {
+                findings.append(LintFinding(
+                    .info, category: "unused-value-type",
+                    message: "Value type '\(valueDef.name)' is not referenced by any property or command"
                 ))
             }
         }
