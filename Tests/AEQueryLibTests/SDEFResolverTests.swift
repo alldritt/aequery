@@ -204,4 +204,37 @@ struct SDEFResolverTests {
         #expect(r.steps[0].code == "cwin")
         #expect(r.steps[0].usedPluralForm == true)
     }
+
+    // MARK: - Children listing
+
+    private func childrenInfo(_ expression: String) throws -> SDEFChildrenInfo {
+        var lexer = Lexer(expression)
+        let tokens = try lexer.tokenize()
+        var parser = Parser(tokens: tokens)
+        let query = try parser.parse()
+        let dict = try SDEFParser().parse(xmlString: sdef)
+        return try SDEFResolver(dictionary: dict).childrenInfo(for: query)
+    }
+
+    @Test func testChildrenAtApplication() throws {
+        let info = try childrenInfo("/App")
+        #expect(info.inClass == "application")
+        #expect(info.elements.map(\.stepName).contains("windows"))
+        #expect(info.elements.map(\.stepName).contains("documents"))
+        #expect(info.properties.map(\.name).contains("name"))
+    }
+
+    @Test func testChildrenAtNestedElementPath() throws {
+        let info = try childrenInfo("/App/windows")
+        #expect(info.inClass == "window")
+        #expect(info.elements.map(\.stepName).contains("documents"))
+        #expect(info.properties.map(\.name).contains("index"))
+    }
+
+    @Test func testChildrenAtScalarPropertyPathIsEmpty() throws {
+        let info = try childrenInfo("/App/windows/name")
+        #expect(info.inClass == nil)
+        #expect(info.elements.isEmpty)
+        #expect(info.properties.isEmpty)
+    }
 }

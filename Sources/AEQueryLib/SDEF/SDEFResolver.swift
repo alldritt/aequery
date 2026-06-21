@@ -239,6 +239,32 @@ public struct SDEFResolver {
         return .classInfo(classDetail(currentClass))
     }
 
+    /// List the possible child steps from the node addressed by the query.
+    /// If the query ends at a non-class-typed property, there are no children.
+    public func childrenInfo(for query: AEQuery) throws -> SDEFChildrenInfo {
+        guard let appClass = dictionary.findClass("application") else {
+            throw ResolverError.missingApplicationClass
+        }
+
+        let targetClass: ClassDef
+        if query.steps.isEmpty {
+            targetClass = appClass
+        } else {
+            let resolved = try resolve(query)
+            guard let finalStep = resolved.steps.last else {
+                targetClass = appClass
+                return childrenInfo(forClass: targetClass)
+            }
+            guard let className = finalStep.className,
+                  let cls = dictionary.findClass(className) else {
+                return SDEFChildrenInfo(inClass: nil, elements: [], properties: [])
+            }
+            targetClass = cls
+        }
+
+        return childrenInfo(forClass: targetClass)
+    }
+
     private func classDetail(_ cls: ClassDef) -> ClassDetail {
         let allProps = dictionary.allProperties(for: cls)
         let allElems = dictionary.allElements(for: cls)
@@ -254,6 +280,43 @@ public struct SDEFResolver {
             properties: allProps,
             elements: elementNames
         )
+    }
+
+    private func childrenInfo(forClass cls: ClassDef) -> SDEFChildrenInfo {
+        let allProps = dictionary.allProperties(for: cls)
+        let allElems = dictionary.allElements(for: cls)
+
+        var seenElements = Set<String>()
+        let elements = allElems.compactMap { elem -> SDEFChildElement? in
+            guard !elem.hidden, let elemClass = dictionary.findClass(elem.type), !elemClass.hidden else { return nil }
+            let stepName = elemClass.pluralName ?? elemClass.name
+            let dedupeKey = "\(stepName.lowercased())|\(elemClass.code)"
+            guard seenElements.insert(dedupeKey).inserted else { return nil }
+            return SDEFChildElement(
+                stepName: stepName,
+                className: elemClass.name,
+                code: elemClass.code
+            )
+        }.sorted { lhs, rhs in
+            lhs.stepName.localizedCaseInsensitiveCompare(rhs.stepName) == .orderedAscending
+        }
+
+        var seenProperties = Set<String>()
+        let properties = allProps.compactMap { prop -> SDEFChildProperty? in
+            guard !prop.hidden else { return nil }
+            let dedupeKey = "\(prop.name.lowercased())|\(prop.code)"
+            guard seenProperties.insert(dedupeKey).inserted else { return nil }
+            return SDEFChildProperty(
+                name: prop.name,
+                code: prop.code,
+                type: prop.type,
+                access: prop.access
+            )
+        }.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+
+        return SDEFChildrenInfo(inClass: cls.name, elements: elements, properties: properties)
     }
 }
 
@@ -277,6 +340,44 @@ public struct PropertyDetail {
     public let type: String?
     public let access: PropertyAccess?
     public let inClass: String
+}
+
+public struct SDEFChildrenInfo {
+    public let inClass: String?
+    public let elements: [SDEFChildElement]
+    public let properties: [SDEFChildProperty]
+
+    public init(inClass: String?, elements: [SDEFChildElement], properties: [SDEFChildProperty]) {
+        self.inClass = inClass
+        self.elements = elements
+        self.properties = properties
+    }
+}
+
+public struct SDEFChildElement: Equatable {
+    public let stepName: String
+    public let className: String
+    public let code: String
+
+    public init(stepName: String, className: String, code: String) {
+        self.stepName = stepName
+        self.className = className
+        self.code = code
+    }
+}
+
+public struct SDEFChildProperty: Equatable {
+    public let name: String
+    public let code: String
+    public let type: String?
+    public let access: PropertyAccess?
+
+    public init(name: String, code: String, type: String?, access: PropertyAccess?) {
+        self.name = name
+        self.code = code
+        self.type = type
+        self.access = access
+    }
 }
 
 public enum ResolverError: Error, LocalizedError, Equatable {
