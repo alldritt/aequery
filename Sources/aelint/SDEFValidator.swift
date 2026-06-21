@@ -97,6 +97,7 @@ struct SDEFValidator {
         findings.append(contentsOf: checkDocumentationQuality())
         findings.append(contentsOf: checkCodeValidity())
         findings.append(contentsOf: checkDeprecatedTypeNames())
+        findings.append(contentsOf: checkNameFormat())
         findings.append(contentsOf: checkHiddenItems())
         findings.append(contentsOf: checkEmptyClasses())
 
@@ -851,6 +852,64 @@ struct SDEFValidator {
                 check(param.type) { "Parameter '\(param.name ?? "(unnamed)")' of command '\(cmd.name)'" }
             }
             check(cmd.result?.type) { "Result of command '\(cmd.name)'" }
+        }
+
+        return findings
+    }
+
+    // MARK: - Terminology name format
+
+    /// sdef(5) says a terminology name is one or more C identifiers
+    /// (`[A-Za-z_][A-Za-z0-9_]*`) separated by single spaces. Taken literally
+    /// that bars a word from starting with a digit — but Apple's own
+    /// dictionaries use such words pervasively and AppleScript accepts them
+    /// (Finder's `large 8 bit mask`, Music's `band 1`, `Numbers 09`). Flagging
+    /// those is noise, so we relax the rule to permit digit-leading words: a
+    /// name must begin with a letter or underscore and otherwise consist of
+    /// space-separated alphanumeric/underscore words. What this still catches is
+    /// a name with a character that can't be tokenized as a term at all — a
+    /// hyphen (`desktop-object`), `#` (`ICN#`), or `&` (`Name & Extension`).
+    private static let nameFormat = try! NSRegularExpression(
+        pattern: "^[A-Za-z_][A-Za-z0-9_]*( [A-Za-z0-9_]+)*$"
+    )
+
+    private static func isWellFormedName(_ name: String) -> Bool {
+        let range = NSRange(name.startIndex..<name.endIndex, in: name)
+        return nameFormat.firstMatch(in: name, range: range) != nil
+    }
+
+    private func checkNameFormat() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        func check(_ name: String, _ describe: () -> String) {
+            guard !name.isEmpty, !Self.isWellFormedName(name) else { return }
+            findings.append(LintFinding(
+                .warning, category: "invalid-name",
+                message: "\(describe()) name '\(name)' is not a valid AppleScript term",
+                context: "sdef(5), Common Attributes \u{2192} name: \"Names must be one or more C identifiers (i.e., [A-Za-z_][A-Za-z0-9_]*) separated by a space.\""
+            ))
+        }
+
+        for cls in dictionary.classes.values {
+            check(cls.name) { "Class" }
+            for prop in cls.properties { check(prop.name) { "Property in class '\(cls.name)':" } }
+        }
+        for recordType in dictionary.recordTypes.values {
+            check(recordType.name) { "Record type" }
+            for prop in recordType.properties { check(prop.name) { "Property in record type '\(recordType.name)':" } }
+        }
+        for valueType in dictionary.valueTypes.values {
+            check(valueType.name) { "Value type" }
+        }
+        for enumDef in dictionary.enumerations.values {
+            check(enumDef.name) { "Enumeration" }
+            for enumerator in enumDef.enumerators { check(enumerator.name) { "Enumerator in '\(enumDef.name)':" } }
+        }
+        for cmd in dictionary.commands.values {
+            check(cmd.name) { "Command" }
+            for param in cmd.parameters {
+                if let name = param.name { check(name) { "Parameter of command '\(cmd.name)':" } }
+            }
         }
 
         return findings

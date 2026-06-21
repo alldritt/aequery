@@ -815,6 +815,51 @@ struct SDEFValidatorTests {
         #expect(deprecated.contains { $0.message.contains("'location'") && $0.message.contains("'location specifier'") })
     }
 
+    // MARK: - invalid-name
+
+    /// Names with characters that can't be tokenized as a term — a hyphen, '#',
+    /// or '&' — are flagged.
+    @Test func malformedNamesAreWarnings() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="trash-object" code="ctrs"/>
+                <value-type name="ICN#" code="ICN#"><cocoa class="NSData"/></value-type>
+                <enumeration name="panel" code="epnl">
+                    <enumerator name="Name &amp; Extension panel" code="pnex"/>
+                </enumeration>
+            </suite>
+        </dictionary>
+        """
+        let invalid = try categories(lint(sdef), "invalid-name")
+        #expect(invalid.count == 3)
+        #expect(invalid.allSatisfy { $0.severity == .warning })
+        #expect(invalid.contains { $0.message.contains("trash-object") })
+        #expect(invalid.contains { $0.message.contains("ICN#") })
+        #expect(invalid.contains { $0.message.contains("Name & Extension panel") })
+    }
+
+    /// Words that start with a digit are permitted — Apple's dictionaries use
+    /// them pervasively (e.g. `large 8 bit mask`, `band 1`) and they're valid in
+    /// practice — so a multi-word name like this is not flagged.
+    @Test func digitLeadingWordsAreNotFlagged() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="icon family" code="ifam">
+                    <property name="large 8 bit mask" code="l8mk" type="data"/>
+                    <property name="band 1" code="bnd1" type="integer"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "invalid-name").isEmpty)
+    }
+
     // MARK: - documentation
 
     @Test func missingDescriptionsReported() throws {
