@@ -322,4 +322,87 @@ struct SDEFParserTests {
         // Should be findable by singular name
         #expect(dict.findClass("tab") != nil)
     }
+
+    // MARK: - id, synonym, responds-to, class-extension (Phase 1 model fields)
+
+    @Test func testParsesIdAndSynonyms() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp" id="app-class">
+                    <synonym name="app"/>
+                    <property name="name" code="pnam" type="text">
+                        <synonym code="pnaM"/>
+                    </property>
+                </class>
+                <enumeration name="save options" code="savo" id="save-enum">
+                    <enumerator name="yes" code="yes ">
+                        <synonym name="true"/>
+                    </enumerator>
+                </enumeration>
+                <command name="open" code="aevtodoc" id="open-cmd">
+                    <synonym name="launch"/>
+                </command>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+
+        let app = dict.findClass("application")!
+        #expect(app.id == "app-class")
+        #expect(app.synonyms.contains { $0.name == "app" && $0.isNameOnly })
+
+        let nameProp = app.properties.first { $0.name == "name" }!
+        #expect(nameProp.synonyms.contains { $0.code == "pnaM" && $0.isCodeOnly })
+
+        let saveEnum = dict.enumerations["save options"]!
+        #expect(saveEnum.id == "save-enum")
+        #expect(saveEnum.enumerators.first?.synonyms.contains { $0.name == "true" } == true)
+
+        let open = dict.commands["open"]!
+        #expect(open.id == "open-cmd")
+        #expect(open.synonyms.contains { $0.name == "launch" })
+    }
+
+    @Test func testParsesRespondsTo() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <responds-to command="open"/>
+                    <responds-to command="quit"/>
+                </class>
+                <command name="open" code="aevtodoc"/>
+                <command name="quit" code="aevtquit"/>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+        #expect(dict.findClass("application")!.respondsTo == ["open", "quit"])
+    }
+
+    @Test func testCapturesClassExtension() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="document" code="docu">
+                    <property name="name" code="pnam" type="text"/>
+                </class>
+            </suite>
+            <suite name="App Suite" code="Myap">
+                <class-extension extends="document" id="doc-ext">
+                    <property name="path" code="ppth" type="text"/>
+                </class-extension>
+            </suite>
+        </dictionary>
+        """
+        let dict = try SDEFParser().parse(xmlString: sdef)
+        // The extension is recorded with its target...
+        #expect(dict.classExtensions.contains { $0.extends == "document" && $0.id == "doc-ext" })
+        // ...and its members are merged into the target class.
+        #expect(dict.findClass("document")!.properties.contains { $0.name == "path" })
+    }
 }

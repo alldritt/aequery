@@ -7,9 +7,19 @@ public struct ScriptingDictionary {
     public var enumerations: [String: EnumDef] = [:] // keyed by lowercase name
     public var commands: [String: CommandDef] = [:]   // keyed by lowercase name
     public var suiteNames: [String] = []              // suite names in order
+    public var classExtensions: [ClassExtension] = [] // SDEF <class-extension> records, in declaration order
     private var pluralToSingular: [String: String] = [:]  // lowercase plural → lowercase singular
 
     public init() {}
+
+    /// Record a `class-extension` and merge its members into the target class.
+    /// The record is retained (with its `extends` target) so validation can
+    /// later confirm the target exists, even when the merge itself no-ops
+    /// because the target isn't loaded yet.
+    public mutating func addExtension(_ ext: ClassExtension) {
+        classExtensions.append(ext)
+        mergeExtension(into: ext.extends, properties: ext.properties, elements: ext.elements)
+    }
 
     public mutating func addClass(_ classDef: ClassDef) {
         let key = classDef.name.lowercased()
@@ -27,7 +37,10 @@ public struct ScriptingDictionary {
                 hidden: classDef.hidden,
                 description: classDef.description ?? existing.description,
                 properties: existing.properties + classDef.properties,
-                elements: existing.elements + classDef.elements
+                elements: existing.elements + classDef.elements,
+                id: classDef.id ?? existing.id,
+                synonyms: existing.synonyms + classDef.synonyms,
+                respondsTo: existing.respondsTo + classDef.respondsTo
             )
         } else {
             classes[key] = classDef
@@ -257,6 +270,48 @@ public struct ScriptingDictionary {
     }
 }
 
+/// An sdef `synonym`: an alternate name and/or code for the main terminology
+/// element (see sdef(5)). Three modes, distinguished by which attributes are
+/// present: name-only (compile-time alias, decompiles as the main term),
+/// code-only (a migrated/old code that decodes to the main term; implicitly
+/// hidden), and name-and-code (a separate term that behaves like the main one).
+public struct Synonym: Equatable {
+    public let name: String?
+    public let code: String?
+    public let hidden: Bool
+    public let plural: String?
+
+    public init(name: String? = nil, code: String? = nil, hidden: Bool = false, plural: String? = nil) {
+        self.name = name
+        self.code = code
+        self.hidden = hidden
+        self.plural = plural
+    }
+
+    /// A code-only synonym (no name) is the spec's sanctioned way to alias an
+    /// old code to the main term; it's implicitly hidden.
+    public var isCodeOnly: Bool { name == nil && code != nil }
+    /// A name-only synonym (no code) is a compile-time alternate spelling.
+    public var isNameOnly: Bool { code == nil && name != nil }
+}
+
+/// An sdef `class-extension`: adds members to an existing class named by
+/// `extends` (see sdef(5)). Retained so validation can confirm the target class
+/// exists; its members are also merged into the target at parse time.
+public struct ClassExtension: Equatable {
+    public let extends: String
+    public let id: String?
+    public let properties: [PropertyDef]
+    public let elements: [ElementDef]
+
+    public init(extends: String, id: String? = nil, properties: [PropertyDef] = [], elements: [ElementDef] = []) {
+        self.extends = extends
+        self.id = id
+        self.properties = properties
+        self.elements = elements
+    }
+}
+
 public struct ClassDef: Equatable {
     public let name: String
     public let code: String
@@ -266,9 +321,13 @@ public struct ClassDef: Equatable {
     public let description: String?
     public var properties: [PropertyDef]
     public var elements: [ElementDef]
+    public let id: String?
+    public let synonyms: [Synonym]
+    public let respondsTo: [String]   // verb names or ids this class responds to
 
     public init(name: String, code: String, pluralName: String? = nil, inherits: String? = nil,
-                hidden: Bool = false, description: String? = nil, properties: [PropertyDef] = [], elements: [ElementDef] = []) {
+                hidden: Bool = false, description: String? = nil, properties: [PropertyDef] = [], elements: [ElementDef] = [],
+                id: String? = nil, synonyms: [Synonym] = [], respondsTo: [String] = []) {
         self.name = name
         self.code = code
         self.pluralName = pluralName
@@ -277,6 +336,9 @@ public struct ClassDef: Equatable {
         self.description = description
         self.properties = properties
         self.elements = elements
+        self.id = id
+        self.synonyms = synonyms
+        self.respondsTo = respondsTo
     }
 }
 
@@ -287,14 +349,16 @@ public struct PropertyDef: Equatable {
     public let access: PropertyAccess?
     public let hidden: Bool
     public let description: String?
+    public let synonyms: [Synonym]
 
-    public init(name: String, code: String, type: String? = nil, access: PropertyAccess? = nil, hidden: Bool = false, description: String? = nil) {
+    public init(name: String, code: String, type: String? = nil, access: PropertyAccess? = nil, hidden: Bool = false, description: String? = nil, synonyms: [Synonym] = []) {
         self.name = name
         self.code = code
         self.type = type
         self.access = access
         self.hidden = hidden
         self.description = description
+        self.synonyms = synonyms
     }
 }
 
@@ -321,22 +385,26 @@ public struct EnumDef: Equatable {
     public let code: String?
     public let enumerators: [Enumerator]
     public let hidden: Bool
+    public let id: String?
 
-    public init(name: String, code: String? = nil, enumerators: [Enumerator] = [], hidden: Bool = false) {
+    public init(name: String, code: String? = nil, enumerators: [Enumerator] = [], hidden: Bool = false, id: String? = nil) {
         self.name = name
         self.code = code
         self.enumerators = enumerators
         self.hidden = hidden
+        self.id = id
     }
 }
 
 public struct Enumerator: Equatable {
     public let name: String
     public let code: String
+    public let synonyms: [Synonym]
 
-    public init(name: String, code: String) {
+    public init(name: String, code: String, synonyms: [Synonym] = []) {
         self.name = name
         self.code = code
+        self.synonyms = synonyms
     }
 }
 
@@ -349,10 +417,13 @@ public struct CommandDef: Equatable {
     public let parameters: [CommandParam]
     public let result: CommandResult?
     public let suiteName: String?
+    public let id: String?
+    public let synonyms: [Synonym]
 
     public init(name: String, code: String, description: String? = nil, hidden: Bool = false,
                 directParameter: CommandParam? = nil, parameters: [CommandParam] = [],
-                result: CommandResult? = nil, suiteName: String? = nil) {
+                result: CommandResult? = nil, suiteName: String? = nil,
+                id: String? = nil, synonyms: [Synonym] = []) {
         self.name = name
         self.code = code
         self.description = description
@@ -361,6 +432,8 @@ public struct CommandDef: Equatable {
         self.parameters = parameters
         self.result = result
         self.suiteName = suiteName
+        self.id = id
+        self.synonyms = synonyms
     }
 }
 

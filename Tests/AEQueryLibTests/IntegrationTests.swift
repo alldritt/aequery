@@ -71,6 +71,23 @@ struct IntegrationTests {
         #expect(resolved.steps[1].kind == .property)
         #expect(resolved.steps[1].code == "pnam")
     }
+
+    /// Pins synonym parsing to live data: Messages declares the name-only
+    /// synonyms `buddy` (on class `participant`) and `service` (on class
+    /// `account`). Both are real-world examples of the mode that must not trip
+    /// the bijection's ambiguous-code check.
+    @Test func testMessagesNameOnlySynonyms() throws {
+        let loader = SDEFLoader()
+        let (dict, _) = try loader.loadSDEF(forApp: "Messages")
+
+        let participant = try #require(dict.findClass("participant"))
+        let buddy = try #require(participant.synonyms.first { $0.name == "buddy" })
+        #expect(buddy.isNameOnly)
+
+        let account = try #require(dict.findClass("account"))
+        let service = try #require(account.synonyms.first { $0.name == "service" })
+        #expect(service.isNameOnly)
+    }
 }
 
 extension Tag {

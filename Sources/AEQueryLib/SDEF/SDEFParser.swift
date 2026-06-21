@@ -111,9 +111,10 @@ public struct SDEFParser {
         for node in try suite.nodes(forXPath: "class-extension") {
             guard let element = node as? XMLElement else { continue }
             guard let extends = element.attribute(forName: "extends")?.stringValue else { continue }
+            let id = element.attribute(forName: "id")?.stringValue
             let properties = parseProperties(element)
             let elements = parseElements(element)
-            dictionary.mergeExtension(into: extends, properties: properties, elements: elements)
+            dictionary.addExtension(ClassExtension(extends: extends, id: id, properties: properties, elements: elements))
         }
 
         // Parse record-types (e.g. Numbers' "print settings", "export options").
@@ -157,8 +158,11 @@ public struct SDEFParser {
         let inherits = element.attribute(forName: "inherits")?.stringValue
         let hidden = suiteHidden || element.attribute(forName: "hidden")?.stringValue == "yes"
         let description = element.attribute(forName: "description")?.stringValue
+        let id = element.attribute(forName: "id")?.stringValue
         let properties = parseProperties(element)
         let elements = parseElements(element)
+        let synonyms = parseSynonyms(element)
+        let respondsTo = parseRespondsTo(element)
 
         return ClassDef(
             name: name,
@@ -168,8 +172,40 @@ public struct SDEFParser {
             hidden: hidden,
             description: description,
             properties: properties,
-            elements: elements
+            elements: elements,
+            id: id,
+            synonyms: synonyms,
+            respondsTo: respondsTo
         )
+    }
+
+    /// Parse `synonym` child elements. Each has at least one of `name`/`code`.
+    private func parseSynonyms(_ element: XMLElement) -> [Synonym] {
+        var synonyms: [Synonym] = []
+        for node in (try? element.nodes(forXPath: "synonym")) ?? [] {
+            guard let syn = node as? XMLElement else { continue }
+            let name = syn.attribute(forName: "name")?.stringValue
+            let code = syn.attribute(forName: "code")?.stringValue
+            guard name != nil || code != nil else { continue }
+            let hidden = syn.attribute(forName: "hidden")?.stringValue == "yes"
+            let plural = syn.attribute(forName: "plural")?.stringValue
+            synonyms.append(Synonym(name: name, code: code, hidden: hidden, plural: plural))
+        }
+        return synonyms
+    }
+
+    /// Parse `responds-to` child elements, returning the verb each names. The
+    /// reference attribute is `command` (older sdefs called it `name`).
+    private func parseRespondsTo(_ element: XMLElement) -> [String] {
+        var verbs: [String] = []
+        for node in (try? element.nodes(forXPath: "responds-to")) ?? [] {
+            guard let rt = node as? XMLElement else { continue }
+            if let ref = rt.attribute(forName: "command")?.stringValue
+                ?? rt.attribute(forName: "name")?.stringValue {
+                verbs.append(ref)
+            }
+        }
+        return verbs
     }
 
     private func parseProperties(_ element: XMLElement) -> [PropertyDef] {
@@ -183,7 +219,8 @@ public struct SDEFParser {
             let access = accessStr.flatMap { PropertyAccess(rawValue: $0) }
             let hidden = propElement.attribute(forName: "hidden")?.stringValue == "yes"
             let description = propElement.attribute(forName: "description")?.stringValue
-            props.append(PropertyDef(name: name, code: code, type: type, access: access, hidden: hidden, description: description))
+            let synonyms = parseSynonyms(propElement)
+            props.append(PropertyDef(name: name, code: code, type: type, access: access, hidden: hidden, description: description, synonyms: synonyms))
         }
         return props
     }
@@ -225,15 +262,16 @@ public struct SDEFParser {
     private func parseEnumeration(_ element: XMLElement, suiteHidden: Bool) -> EnumDef {
         let name = element.attribute(forName: "name")?.stringValue ?? ""
         let code = element.attribute(forName: "code")?.stringValue
+        let id = element.attribute(forName: "id")?.stringValue
         let hidden = suiteHidden || element.attribute(forName: "hidden")?.stringValue == "yes"
         var enumerators: [Enumerator] = []
         for node in (try? element.nodes(forXPath: "enumerator")) ?? [] {
             guard let enumElement = node as? XMLElement,
                   let eName = enumElement.attribute(forName: "name")?.stringValue,
                   let eCode = enumElement.attribute(forName: "code")?.stringValue else { continue }
-            enumerators.append(Enumerator(name: eName, code: eCode))
+            enumerators.append(Enumerator(name: eName, code: eCode, synonyms: parseSynonyms(enumElement)))
         }
-        return EnumDef(name: name, code: code, enumerators: enumerators, hidden: hidden)
+        return EnumDef(name: name, code: code, enumerators: enumerators, hidden: hidden, id: id)
     }
 
     private func parseCommand(_ element: XMLElement, suiteName: String?, suiteHidden: Bool) -> CommandDef {
@@ -241,6 +279,8 @@ public struct SDEFParser {
         let code = element.attribute(forName: "code")?.stringValue ?? ""
         let description = element.attribute(forName: "description")?.stringValue
         let hidden = suiteHidden || element.attribute(forName: "hidden")?.stringValue == "yes"
+        let id = element.attribute(forName: "id")?.stringValue
+        let synonyms = parseSynonyms(element)
 
         // Parse direct-parameter
         var directParam: CommandParam? = nil
@@ -279,7 +319,9 @@ public struct SDEFParser {
             directParameter: directParam,
             parameters: params,
             result: result,
-            suiteName: suiteName
+            suiteName: suiteName,
+            id: id,
+            synonyms: synonyms
         )
     }
 }
