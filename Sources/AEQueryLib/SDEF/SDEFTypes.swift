@@ -159,6 +159,15 @@ public struct ScriptingDictionary {
         return findEnumerationByCode(name)
     }
 
+    /// Find a command by its name or, failing that, its `id`. A `responds-to`
+    /// element's `command` attribute (and an `xref` target) may be either.
+    public func findCommand(byNameOrId ref: String) -> CommandDef? {
+        if let cmd = commands[ref.lowercased()] {
+            return cmd
+        }
+        return commands.values.first { $0.id == ref }
+    }
+
     /// Find a record-type definition by name. SDEF `<record-type>` elements
     /// (e.g. Numbers' "print settings", "export options") declare record
     /// structures that commands and properties may reference as a type.

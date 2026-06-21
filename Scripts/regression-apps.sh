@@ -42,6 +42,6 @@ IFS='
 '
 for app in $APPS; do
     echo "===== $app ====="
-    "$AELINT" "$app" 2>&1 | grep -E "ambiguous-code|ambiguous-term|invalid-name|invalid-code" \
+    "$AELINT" "$app" 2>&1 | grep -E "ambiguous-code|ambiguous-term|invalid-name|invalid-code|undefined-extends|undefined-responds-to|duplicate-id" \
         || echo "  (no structural findings)"
 done

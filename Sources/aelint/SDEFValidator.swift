@@ -98,6 +98,9 @@ struct SDEFValidator {
         findings.append(contentsOf: checkCodeValidity())
         findings.append(contentsOf: checkDeprecatedTypeNames())
         findings.append(contentsOf: checkNameFormat())
+        findings.append(contentsOf: checkExtendsTargets())
+        findings.append(contentsOf: checkRespondsTo())
+        findings.append(contentsOf: checkDuplicateIds())
         findings.append(contentsOf: checkHiddenItems())
         findings.append(contentsOf: checkEmptyClasses())
 
@@ -912,6 +915,79 @@ struct SDEFValidator {
             }
         }
 
+        return findings
+    }
+
+    // MARK: - class-extension targets
+
+    /// Every `class-extension` must extend a class defined somewhere in the
+    /// dictionary. A dangling `extends` silently drops the extension's members
+    /// (the merge no-ops), so the added properties and elements simply vanish.
+    /// The target is resolved against the fully-parsed dictionary, so an
+    /// extension that textually precedes its target class isn't a false
+    /// positive.
+    private func checkExtendsTargets() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        for ext in dictionary.classExtensions {
+            if dictionary.findClass(ext.extends) == nil {
+                findings.append(LintFinding(
+                    .error, category: "undefined-extends",
+                    message: "Class-extension extends undefined class '\(ext.extends)'",
+                    context: "Its added properties and elements are silently dropped"
+                ))
+            }
+        }
+        return findings
+    }
+
+    // MARK: - responds-to verbs
+
+    /// A class's `responds-to` must name a verb (command) defined in the
+    /// dictionary, by name or by id. A dangling reference documents a command
+    /// the application doesn't actually declare.
+    private func checkRespondsTo() -> [LintFinding] {
+        var findings: [LintFinding] = []
+        for cls in dictionary.classes.values where !cls.hidden {
+            for verb in cls.respondsTo {
+                if dictionary.findCommand(byNameOrId: verb) == nil {
+                    findings.append(LintFinding(
+                        .error, category: "undefined-responds-to",
+                        message: "Class '\(cls.name)' responds-to undefined command '\(verb)'"
+                    ))
+                }
+            }
+        }
+        return findings
+    }
+
+    // MARK: - id uniqueness
+
+    /// sdef(5): an `id` is "a unique identifier for the element." A duplicate
+    /// breaks the disambiguation `responds-to` and `xref` rely on.
+    private func checkDuplicateIds() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        // id → labels of the elements carrying it.
+        var byId: [String: [String]] = [:]
+        func record(_ id: String?, _ label: String) {
+            guard let id else { return }
+            byId[id, default: []].append(label)
+        }
+
+        for cls in dictionary.classes.values { record(cls.id, "class '\(cls.name)'") }
+        for recordType in dictionary.recordTypes.values { record(recordType.id, "record type '\(recordType.name)'") }
+        for valueType in dictionary.valueTypes.values { record(valueType.id, "value type '\(valueType.name)'") }
+        for enumDef in dictionary.enumerations.values { record(enumDef.id, "enumeration '\(enumDef.name)'") }
+        for cmd in dictionary.commands.values { record(cmd.id, "command '\(cmd.name)'") }
+        for ext in dictionary.classExtensions { record(ext.id, "class-extension of '\(ext.extends)'") }
+
+        for (id, labels) in byId where labels.count > 1 {
+            findings.append(LintFinding(
+                .error, category: "duplicate-id",
+                message: "id '\(id)' is used by multiple elements: \(labels.sorted().joined(separator: ", "))",
+                context: "sdef(5): an id must be unique"
+            ))
+        }
         return findings
     }
 

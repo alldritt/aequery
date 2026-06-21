@@ -860,6 +860,130 @@ struct SDEFValidatorTests {
         #expect(try categories(lint(sdef), "invalid-name").isEmpty)
     }
 
+    // MARK: - undefined-extends
+
+    @Test func extensionOfUndefinedClassIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class-extension extends="ghost">
+                    <property name="path" code="ppth" type="text"/>
+                </class-extension>
+            </suite>
+        </dictionary>
+        """
+        let undef = try categories(lint(sdef), "undefined-extends")
+        #expect(undef.count == 1)
+        #expect(undef.first?.severity == .error)
+        #expect(undef.first?.message.contains("ghost") == true)
+    }
+
+    /// An extension whose target is defined in a later suite is not a false
+    /// positive — resolution is against the fully-parsed dictionary.
+    @Test func extensionOfClassInLaterSuiteIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="App Suite" code="Myap">
+                <class-extension extends="document">
+                    <property name="path" code="ppth" type="text"/>
+                </class-extension>
+            </suite>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="document" code="docu"/>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "undefined-extends").isEmpty)
+    }
+
+    // MARK: - undefined-responds-to
+
+    @Test func respondsToUndefinedCommandIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <responds-to command="vanish"/>
+                </class>
+                <command name="open" code="aevtodoc"/>
+            </suite>
+        </dictionary>
+        """
+        let undef = try categories(lint(sdef), "undefined-responds-to")
+        #expect(undef.count == 1)
+        #expect(undef.first?.severity == .error)
+        #expect(undef.first?.message.contains("vanish") == true)
+    }
+
+    @Test func respondsToDefinedCommandIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <responds-to command="open"/>
+                </class>
+                <command name="open" code="aevtodoc"/>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "undefined-responds-to").isEmpty)
+    }
+
+    /// A responds-to may reference a verb by its id rather than its name.
+    @Test func respondsToByIdIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <responds-to command="open-verb"/>
+                </class>
+                <command name="open" code="aevtodoc" id="open-verb"/>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "undefined-responds-to").isEmpty)
+    }
+
+    // MARK: - duplicate-id
+
+    @Test func duplicateIdIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="document" code="docu" id="dup"/>
+                <command name="open" code="aevtodoc" id="dup"/>
+            </suite>
+        </dictionary>
+        """
+        let dup = try categories(lint(sdef), "duplicate-id")
+        #expect(dup.count == 1)
+        #expect(dup.first?.severity == .error)
+        #expect(dup.first?.message.contains("dup") == true)
+    }
+
+    @Test func distinctIdsAreClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="document" code="docu" id="doc"/>
+                <command name="open" code="aevtodoc" id="open"/>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "duplicate-id").isEmpty)
+    }
+
     // MARK: - documentation
 
     @Test func missingDescriptionsReported() throws {
