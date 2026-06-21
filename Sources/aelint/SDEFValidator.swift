@@ -109,11 +109,19 @@ struct SDEFValidator {
 
     // MARK: - Term ↔ code bijection
 
-    /// A term the dictionary defines, paired with its code.
+    /// A term the dictionary defines, paired with its code and any synonyms.
     private struct Term {
         let kind: String
         let name: String
         let code: String
+        let synonyms: [Synonym]
+
+        init(kind: String, name: String, code: String, synonyms: [Synonym] = []) {
+            self.kind = kind
+            self.name = name
+            self.code = code
+            self.synonyms = synonyms
+        }
     }
 
     /// Every term that owns a code, paired with it. Hidden items are excluded.
@@ -135,9 +143,9 @@ struct SDEFValidator {
         var terms: [Term] = []
 
         for cls in dictionary.classes.values where !cls.hidden {
-            terms.append(Term(kind: "class", name: cls.name, code: cls.code))
+            terms.append(Term(kind: "class", name: cls.name, code: cls.code, synonyms: cls.synonyms))
             for prop in cls.properties where !prop.hidden {
-                terms.append(Term(kind: "property", name: prop.name, code: prop.code))
+                terms.append(Term(kind: "property", name: prop.name, code: prop.code, synonyms: prop.synonyms))
             }
         }
         for enumDef in dictionary.enumerations.values where !enumDef.hidden {
@@ -145,20 +153,20 @@ struct SDEFValidator {
                 terms.append(Term(kind: "enumeration", name: enumDef.name, code: code))
             }
             for enumerator in enumDef.enumerators {
-                terms.append(Term(kind: "enumerator", name: enumerator.name, code: enumerator.code))
+                terms.append(Term(kind: "enumerator", name: enumerator.name, code: enumerator.code, synonyms: enumerator.synonyms))
             }
         }
         for valueType in dictionary.valueTypes.values where !valueType.hidden {
-            terms.append(Term(kind: "value type", name: valueType.name, code: valueType.code))
+            terms.append(Term(kind: "value type", name: valueType.name, code: valueType.code, synonyms: valueType.synonyms))
         }
         for recordType in dictionary.recordTypes.values where !recordType.hidden {
-            terms.append(Term(kind: "record type", name: recordType.name, code: recordType.code))
+            terms.append(Term(kind: "record type", name: recordType.name, code: recordType.code, synonyms: recordType.synonyms))
             for prop in recordType.properties where !prop.hidden {
-                terms.append(Term(kind: "property", name: prop.name, code: prop.code))
+                terms.append(Term(kind: "property", name: prop.name, code: prop.code, synonyms: prop.synonyms))
             }
         }
         for cmd in dictionary.commands.values where !cmd.hidden {
-            terms.append(Term(kind: "command", name: cmd.name, code: cmd.code))
+            terms.append(Term(kind: "command", name: cmd.name, code: cmd.code, synonyms: cmd.synonyms))
         }
 
         return terms
@@ -180,6 +188,17 @@ struct SDEFValidator {
     /// declared identically in several places (the same name on the same code)
     /// dedups to a single entry and is not flagged. Four- and eight-character
     /// codes share one map but never collide, since their keys differ in length.
+    ///
+    /// Synonyms participate per their sdef(5) mode, so they don't generate false
+    /// positives:
+    ///   - name-only: an alternate spelling that decompiles to the main term.
+    ///     The alias name maps to the main term's *code* (name direction only);
+    ///     it is not a competing name for that code, since the code always
+    ///     decompiles to the main name.
+    ///   - code-only: a migrated old code that decodes to the main term;
+    ///     implicitly hidden and intentional, so excluded from both directions.
+    ///   - name-and-code: a separate term that behaves like the main one; enters
+    ///     both maps as an independent term.
     private func checkTermCodeBijection() -> [LintFinding] {
         var findings: [LintFinding] = []
 
@@ -190,11 +209,36 @@ struct SDEFValidator {
         // lowercased name → original spelling (for the message)
         var spelling: [String: String] = [:]
 
+        func addName(_ name: String, code: String, nameLabel: String, codeLabel: String) {
+            let lname = name.lowercased()
+            namesByCode[code, default: [:]][lname] = nameLabel
+            codesByName[lname, default: [:]][code] = codeLabel
+            spelling[lname] = name
+        }
+
         for term in allTerms() {
-            let lname = term.name.lowercased()
-            namesByCode[term.code, default: [:]][lname] = "\(term.kind) '\(term.name)'"
-            codesByName[lname, default: [:]][term.code] = "\(term.kind) '\(term.code)'"
-            spelling[lname] = term.name
+            addName(term.name, code: term.code,
+                    nameLabel: "\(term.kind) '\(term.name)'",
+                    codeLabel: "\(term.kind) '\(term.code)'")
+
+            for syn in term.synonyms where !syn.hidden {
+                if syn.isCodeOnly {
+                    // Sanctioned migration alias — excluded from both directions.
+                    continue
+                } else if syn.isNameOnly, let synName = syn.name {
+                    // The alias name resolves to the main term's code at compile
+                    // time; it's not a competing name for that code (which still
+                    // decompiles to the main term). Name direction only.
+                    let lname = synName.lowercased()
+                    codesByName[lname, default: [:]][term.code] = "synonym '\(term.code)'"
+                    spelling[lname] = synName
+                } else if let synName = syn.name, let synCode = syn.code {
+                    // A separate term that behaves like the main one.
+                    addName(synName, code: synCode,
+                            nameLabel: "synonym '\(synName)'",
+                            codeLabel: "synonym '\(synCode)'")
+                }
+            }
         }
 
         for (code, labels) in namesByCode where labels.count > 1 {

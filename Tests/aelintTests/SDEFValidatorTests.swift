@@ -366,6 +366,90 @@ struct SDEFValidatorTests {
         #expect(ambiguous.first?.message.contains("shrd") == true)
     }
 
+    // MARK: - ambiguous-code/term with synonyms
+
+    /// A name-only synonym is an alternate spelling that decompiles to the main
+    /// term. It is not a competing name for the main code, so it must not trip
+    /// ambiguous-code. (Real example: Messages' `buddy` for `participant`.)
+    @Test func nameOnlySynonymDoesNotTripAmbiguousCode() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="participant" code="pres">
+                    <synonym name="buddy"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let findings = try lint(sdef)
+        #expect(categories(findings, "ambiguous-code").isEmpty)
+        #expect(categories(findings, "ambiguous-term").isEmpty)
+    }
+
+    /// A code-only synonym is a sanctioned migration alias (implicitly hidden),
+    /// so it's excluded from the bijection in both directions. (Real example:
+    /// Notes' `<synonym code="asdr"/>`.)
+    @Test func codeOnlySynonymIsExcluded() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <command name="show" code="noteshow">
+                    <synonym code="asdrshow"/>
+                </command>
+            </suite>
+        </dictionary>
+        """
+        let findings = try lint(sdef)
+        #expect(categories(findings, "ambiguous-code").isEmpty)
+        #expect(categories(findings, "ambiguous-term").isEmpty)
+    }
+
+    /// A name-only synonym whose name resolves to a *different* code elsewhere is
+    /// a genuine compile-time ambiguity and is flagged.
+    @Test func nameOnlySynonymCollidingWithRealTermIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="participant" code="pres">
+                    <synonym name="buddy"/>
+                </class>
+                <class name="buddy" code="budy"/>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-term")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("buddy") == true)
+    }
+
+    /// A name-and-code synonym is a separate independent term, so a collision on
+    /// its code is caught like any other.
+    @Test func nameAndCodeSynonymCodeCollisionIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="widget" code="wdgt">
+                    <synonym name="gadget" code="shrd"/>
+                </class>
+                <class name="gizmo" code="shrd"/>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-code")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("shrd") == true)
+    }
+
     /// An enumeration is a type, so its name can be used as a property,
     /// parameter, or result type. A property sharing that name under a different
     /// code is therefore a genuine name collision.
