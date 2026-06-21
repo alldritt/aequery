@@ -157,7 +157,7 @@ struct SDEFValidatorTests {
         #expect(try categories(lint(sdef), "unused-value-type").isEmpty)
     }
 
-    // MARK: - duplicate-code
+    // MARK: - ambiguous-code
 
     @Test func duplicateClassCodeIsError() throws {
         let sdef = """
@@ -170,13 +170,13 @@ struct SDEFValidatorTests {
             </suite>
         </dictionary>
         """
-        let dup = try categories(lint(sdef), "duplicate-code")
+        let dup = try categories(lint(sdef), "ambiguous-code")
         #expect(dup.count == 1)
         #expect(dup.first?.severity == .error)
         #expect(dup.first?.message.contains("dupe") == true)
     }
 
-    @Test func duplicateEnumeratorCodeIsWarning() throws {
+    @Test func duplicateEnumeratorCodeIsError() throws {
         let sdef = """
         <?xml version="1.0" encoding="UTF-8"?>
         <dictionary>
@@ -191,9 +191,226 @@ struct SDEFValidatorTests {
             </suite>
         </dictionary>
         """
-        let dup = try categories(lint(sdef), "duplicate-code")
+        let dup = try categories(lint(sdef), "ambiguous-code")
         #expect(dup.count == 1)
-        #expect(dup.first?.severity == .warning)
+        #expect(dup.first?.severity == .error)
+        #expect(dup.first?.message.contains("shrd") == true)
+    }
+
+    @Test func duplicateCommandCodeIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <command name="frobnicate" code="MyApfrob"/>
+                <command name="frobnicate twice" code="MyApfrob"/>
+            </suite>
+        </dictionary>
+        """
+        let dup = try categories(lint(sdef), "ambiguous-code")
+        #expect(dup.count == 1)
+        #expect(dup.first?.severity == .error)
+        #expect(dup.first?.message.contains("MyApfrob") == true)
+    }
+
+    /// The decompiler ambiguity isn't special to the standard Apple Event
+    /// codes: a custom property code mapped to different names across two
+    /// classes is just as ambiguous, and is reported as an error.
+    @Test func crossClassPropertyCodeConflictIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="document" code="docu">
+                    <property name="hue" code="cust" type="text"/>
+                </class>
+                <class name="window" code="cwin">
+                    <property name="shade" code="cust" type="text"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-code")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("cust") == true)
+    }
+
+    /// The same property code used with the *same* name across classes is the
+    /// normal case (e.g. `pnam` is "name" everywhere) and must not be flagged.
+    @Test func samePropertyCodeSameNameAcrossClassesIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="document" code="docu">
+                    <property name="name" code="pnam" type="text"/>
+                </class>
+                <class name="window" code="cwin">
+                    <property name="name" code="pnam" type="text"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "ambiguous-code").isEmpty)
+    }
+
+    /// Parameter keyword codes are scoped to their command (the Standard Suite
+    /// reuses `kocl`, `insh`, and others across commands by design), so they
+    /// don't take part in the dictionary-wide bijection. Reuse across commands
+    /// isn't flagged.
+    @Test func parameterCodeReusedAcrossCommandsIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <command name="resize" code="MyAprsiz">
+                    <parameter name="width" code="dimn" type="integer"/>
+                </command>
+                <command name="grow" code="MyApgrow">
+                    <parameter name="height" code="dimn" type="integer"/>
+                </command>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "ambiguous-code").isEmpty)
+        #expect(try categories(lint(sdef), "ambiguous-term").isEmpty)
+    }
+
+    /// The same parameter (same name and code) reused across commands is one
+    /// term, not a collision.
+    @Test func parameterSameNameAndCodeAcrossCommandsIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <command name="save" code="coresave">
+                    <parameter name="in" code="kfil" type="text"/>
+                </command>
+                <command name="export" code="MyApexpt">
+                    <parameter name="in" code="kfil" type="text"/>
+                </command>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "ambiguous-code").isEmpty)
+        #expect(try categories(lint(sdef), "ambiguous-term").isEmpty)
+    }
+
+    // MARK: - ambiguous-term (one name → several codes)
+
+    /// A name that resolves to two different codes is ambiguous when AppleScript
+    /// compiles source. Here a class and a command share the name "print" but
+    /// carry different codes.
+    @Test func nameMappedToMultipleCodesIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="print" code="prnt"/>
+                <command name="print" code="aevtpdoc"/>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-term")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("print") == true)
+    }
+
+    /// A class and a property may legitimately share both a name and a code —
+    /// that's a single term, so neither direction is flagged.
+    @Test func classAndPropertySharingNameAndCodeIsClean() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="color" code="colr"/>
+                <class name="document" code="docu">
+                    <property name="color" code="colr" type="color"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let findings = try lint(sdef)
+        #expect(categories(findings, "ambiguous-code").isEmpty)
+        #expect(categories(findings, "ambiguous-term").isEmpty)
+    }
+
+    /// Collisions are caught across namespaces: a class and an enumerator that
+    /// share a code but not a name is an error even though they're different
+    /// kinds of term.
+    @Test func crossNamespaceCodeCollisionIsError() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="widget" code="shrd"/>
+                <enumeration name="mode" code="emod">
+                    <enumerator name="fast" code="shrd"/>
+                </enumeration>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-code")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("shrd") == true)
+    }
+
+    /// An enumeration is a type, so its name can be used as a property,
+    /// parameter, or result type. A property sharing that name under a different
+    /// code is therefore a genuine name collision.
+    @Test func enumerationNameCollidesAsTerm() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <enumeration name="image quality" code="iqEn">
+                    <enumerator name="best" code="iqBs"/>
+                </enumeration>
+                <class name="document" code="docu">
+                    <property name="image quality" code="pImq" type="integer"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-term")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("image quality") == true)
+    }
+
+    /// An enumeration's code must also be unique: if it collides with
+    /// another term's code under a different name, that's an error.
+    @Test func enumerationCodeStillCollides() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <enumeration name="format options" code="fmt1">
+                    <enumerator name="plain" code="fmtP"/>
+                </enumeration>
+                <class name="document" code="docu">
+                    <property name="format" code="fmt1" type="text"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
+        let ambiguous = try categories(lint(sdef), "ambiguous-code")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("fmt1") == true)
     }
 
     // MARK: - name-clash
@@ -352,7 +569,10 @@ struct SDEFValidatorTests {
 
     // MARK: - non-standard-term
 
-    @Test func wellKnownCodeWithNonStandardNameIsWarning() throws {
+    /// A standard code given a single non-standard name throughout the
+    /// dictionary is a consistent (if unconventional) convention — it
+    /// decompiles unambiguously, so it's only informational.
+    @Test func wellKnownCodeWithConsistentNonStandardNameIsInfo() throws {
         let sdef = """
         <?xml version="1.0" encoding="UTF-8"?>
         <dictionary>
@@ -361,16 +581,25 @@ struct SDEFValidatorTests {
                 <class name="document" code="docu">
                     <property name="title" code="pnam" type="text"/>
                 </class>
+                <class name="window" code="cwin">
+                    <property name="title" code="pnam" type="text"/>
+                </class>
             </suite>
         </dictionary>
         """
-        let nonStd = try categories(lint(sdef), "non-standard-term")
-        #expect(nonStd.count == 1)
-        #expect(nonStd.first?.severity == .warning)
-        #expect(nonStd.first?.message.contains("pnam") == true)
+        let findings = try lint(sdef)
+        let nonStd = categories(findings, "non-standard-term")
+        #expect(nonStd.count == 2)
+        #expect(nonStd.allSatisfy { $0.severity == .info })
+        #expect(nonStd.allSatisfy { $0.message.contains("pnam") })
+        // A consistent name is not ambiguous.
+        #expect(categories(findings, "ambiguous-code").isEmpty)
     }
 
-    @Test func wellKnownCodeMappedInconsistentlyIsError() throws {
+    /// A standard code mapped to *different* names is ambiguous for the
+    /// decompiler: reported as an error by the ambiguous-code check, and not
+    /// duplicated as a non-standard-term finding.
+    @Test func wellKnownCodeMappedInconsistentlyIsAmbiguousError() throws {
         let sdef = """
         <?xml version="1.0" encoding="UTF-8"?>
         <dictionary>
@@ -385,9 +614,36 @@ struct SDEFValidatorTests {
             </suite>
         </dictionary>
         """
+        let findings = try lint(sdef)
+        let ambiguous = categories(findings, "ambiguous-code")
+        #expect(ambiguous.count == 1)
+        #expect(ambiguous.first?.severity == .error)
+        #expect(ambiguous.first?.message.contains("pnam") == true)
+        // The ambiguity check owns this case; don't also flag non-standard-term.
+        #expect(categories(findings, "non-standard-term").isEmpty)
+    }
+
+    /// The Standard Suite application/document property codes are well-known:
+    /// renaming `vers` (version) or `imod` (modified) is flagged.
+    @Test func standardSuiteApplicationDocumentCodesAreWellKnown() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp">
+                    <property name="build" code="vers" type="text"/>
+                </class>
+                <class name="document" code="docu">
+                    <property name="dirty" code="imod" type="boolean"/>
+                </class>
+            </suite>
+        </dictionary>
+        """
         let nonStd = try categories(lint(sdef), "non-standard-term")
         #expect(nonStd.count == 2)
-        #expect(nonStd.allSatisfy { $0.severity == .error })
+        #expect(nonStd.allSatisfy { $0.severity == .info })
+        #expect(nonStd.contains { $0.message.contains("vers") && $0.message.contains("version") })
+        #expect(nonStd.contains { $0.message.contains("imod") && $0.message.contains("modified") })
     }
 
     // MARK: - reserved-word
@@ -410,22 +666,6 @@ struct SDEFValidatorTests {
     }
 
     // MARK: - command validation
-
-    @Test func duplicateCommandCodeIsWarning() throws {
-        let sdef = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <dictionary>
-            <suite name="Standard Suite" code="core">
-                <class name="application" code="capp"/>
-                <command name="frobnicate" code="MyApfrob"/>
-                <command name="frobnicate twice" code="MyApfrob"/>
-            </suite>
-        </dictionary>
-        """
-        let dup = try categories(lint(sdef), "duplicate-command-code")
-        #expect(dup.count == 1)
-        #expect(dup.first?.severity == .warning)
-    }
 
     @Test func duplicateParameterCodeIsError() throws {
         let sdef = """
@@ -510,6 +750,69 @@ struct SDEFValidatorTests {
         #expect(invalid.count == 1)
         #expect(invalid.first?.severity == .error)
         #expect(invalid.first?.message.contains("toolong") == true)
+    }
+
+    /// A code in hexadecimal form (`0x…`) decodes to four bytes and is valid —
+    /// it must not be mistaken for an over-long literal.
+    @Test func hexFormCodeIsValid() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="widget" code="0x00000001"/>
+            </suite>
+        </dictionary>
+        """
+        #expect(try categories(lint(sdef), "invalid-code").isEmpty)
+    }
+
+    /// Code validity now covers enumerators, value-types, record-types, and
+    /// parameters too, not just classes, properties, and commands.
+    @Test func invalidEnumeratorAndValueTypeCodesAreErrors() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <enumeration name="mode" code="emod">
+                    <enumerator name="fast" code="toolong"/>
+                </enumeration>
+                <value-type name="swatch" code="xy"><cocoa class="NSData"/></value-type>
+            </suite>
+        </dictionary>
+        """
+        let invalid = try categories(lint(sdef), "invalid-code")
+        #expect(invalid.count == 2)
+        #expect(invalid.allSatisfy { $0.severity == .error })
+        #expect(invalid.contains { $0.message.contains("fast") })
+        #expect(invalid.contains { $0.message.contains("swatch") })
+    }
+
+    // MARK: - deprecated-type
+
+    @Test func deprecatedPrimitiveTypeNamesAreWarnings() throws {
+        let sdef = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+            <suite name="Standard Suite" code="core">
+                <class name="application" code="capp"/>
+                <class name="document" code="docu">
+                    <property name="title" code="ptit" type="string"/>
+                    <property name="target" code="ptgt" type="object"/>
+                </class>
+                <command name="reveal" code="MyAprevl">
+                    <parameter name="at" code="patt" type="location"/>
+                </command>
+            </suite>
+        </dictionary>
+        """
+        let deprecated = try categories(lint(sdef), "deprecated-type")
+        #expect(deprecated.count == 3)
+        #expect(deprecated.allSatisfy { $0.severity == .warning })
+        #expect(deprecated.contains { $0.message.contains("'string'") && $0.message.contains("'text'") })
+        #expect(deprecated.contains { $0.message.contains("'object'") && $0.message.contains("'specifier'") })
+        #expect(deprecated.contains { $0.message.contains("'location'") && $0.message.contains("'location specifier'") })
     }
 
     // MARK: - documentation

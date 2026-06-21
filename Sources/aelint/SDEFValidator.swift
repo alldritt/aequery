@@ -17,12 +17,25 @@ struct SDEFValidator {
         name.count == 4 && name.contains { !$0.isLetter }
     }
 
-    // Well-known 4CC codes and their expected standard terms
+    // Well-known 4CC codes and their expected standard terms. These are codes
+    // Apple reserves ecosystem-wide for a single name, so using the code under
+    // a different name is a deviation rather than a legitimate app-specific
+    // choice. Sources: the intrinsic AEOM properties every object carries
+    // (class, properties) and the Standard Suite application/document/window
+    // classes in /System/Library/ScriptingDefinitions/CocoaStandard.sdef.
     private static let wellKnownCodes: [String: String] = [
-        "pnam": "name",
+        // Intrinsic AEOM properties (every object)
         "pcls": "class",
-        "ID  ": "id",
         "pALL": "properties",
+        // Standard Suite — application
+        "pnam": "name",
+        "pisf": "frontmost",
+        "vers": "version",
+        // Standard Suite — document
+        "imod": "modified",
+        "file": "file",
+        // Standard Suite — window
+        "ID  ": "id",
         "pidx": "index",
         "pvis": "visible",
         "pbnd": "bounds",
@@ -69,7 +82,7 @@ struct SDEFValidator {
     func validate() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        findings.append(contentsOf: checkDuplicateCodes())
+        findings.append(contentsOf: checkTermCodeBijection())
         findings.append(contentsOf: checkElementPropertyNameClashes())
         findings.append(contentsOf: checkInheritanceCycles())
         findings.append(contentsOf: checkUndefinedClassReferences())
@@ -83,65 +96,124 @@ struct SDEFValidator {
         findings.append(contentsOf: checkStandardSuiteCompliance())
         findings.append(contentsOf: checkDocumentationQuality())
         findings.append(contentsOf: checkCodeValidity())
+        findings.append(contentsOf: checkDeprecatedTypeNames())
         findings.append(contentsOf: checkHiddenItems())
         findings.append(contentsOf: checkEmptyClasses())
 
         return findings
     }
 
-    // MARK: - Duplicate 4CC codes
+    // MARK: - Term ↔ code bijection
 
-    /// Find cases where the same 4CC code maps to different terms.
-    private func checkDuplicateCodes() -> [LintFinding] {
+    /// A term the dictionary defines, paired with its code.
+    private struct Term {
+        let kind: String
+        let name: String
+        let code: String
+    }
+
+    /// Every term that owns a code, paired with it. Hidden items are excluded.
+    /// Inherited properties aren't re-collected; each class contributes only its
+    /// own declarations, so a property genuinely shared across classes appears
+    /// once per declaration and dedups by identity below.
+    ///
+    /// Enumeration names are user-visible: an enumeration is a type, so its name
+    /// can appear as a property, parameter, or command-result type. It takes
+    /// part in the bijection like any other term.
+    ///
+    /// Command *parameters* are deliberately omitted. AppleScript scopes
+    /// parameter keyword codes to their command — the Standard Suite every app
+    /// inherits reuses `kocl`, `insh`, and others across `make`, `move`, and
+    /// `count` by design — so parameters don't take part in the dictionary-wide
+    /// bijection. A parameter code duplicated *within* one command is still a
+    /// defect and is checked in `checkCommandValidation`.
+    private func allTerms() -> [Term] {
+        var terms: [Term] = []
+
+        for cls in dictionary.classes.values where !cls.hidden {
+            terms.append(Term(kind: "class", name: cls.name, code: cls.code))
+            for prop in cls.properties where !prop.hidden {
+                terms.append(Term(kind: "property", name: prop.name, code: prop.code))
+            }
+        }
+        for enumDef in dictionary.enumerations.values where !enumDef.hidden {
+            if let code = enumDef.code {
+                terms.append(Term(kind: "enumeration", name: enumDef.name, code: code))
+            }
+            for enumerator in enumDef.enumerators {
+                terms.append(Term(kind: "enumerator", name: enumerator.name, code: enumerator.code))
+            }
+        }
+        for valueType in dictionary.valueTypes.values where !valueType.hidden {
+            terms.append(Term(kind: "value type", name: valueType.name, code: valueType.code))
+        }
+        for recordType in dictionary.recordTypes.values where !recordType.hidden {
+            terms.append(Term(kind: "record type", name: recordType.name, code: recordType.code))
+            for prop in recordType.properties where !prop.hidden {
+                terms.append(Term(kind: "property", name: prop.name, code: prop.code))
+            }
+        }
+        for cmd in dictionary.commands.values where !cmd.hidden {
+            terms.append(Term(kind: "command", name: cmd.name, code: cmd.code))
+        }
+
+        return terms
+    }
+
+    /// A well-formed dictionary maps user-visible terms to codes one-for-one: a
+    /// name resolves to a single code, and a code resolves to a single name.
+    /// Either ambiguity breaks AppleScript's compiler/decompiler, so both are
+    /// reported as errors:
+    ///
+    ///   - One code → several names: decompiling a raw Apple Event that carries
+    ///     the code has no single term to produce (category `ambiguous-code`).
+    ///   - One name → several codes: compiling source that uses the name has no
+    ///     single code to emit (category `ambiguous-term`).
+    ///
+    /// The two checks span every term kind together — classes, properties,
+    /// enumerations, enumerators, value-types, record-types, and commands — so
+    /// collisions are caught across namespaces, not just within one. A term
+    /// declared identically in several places (the same name on the same code)
+    /// dedups to a single entry and is not flagged. Four- and eight-character
+    /// codes share one map but never collide, since their keys differ in length.
+    private func checkTermCodeBijection() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Check class codes
-        var classCodes: [String: [String]] = [:]  // code → [class names]
-        for cls in dictionary.classes.values {
-            classCodes[cls.code, default: []].append(cls.name)
+        // code → lowercased name → display label ("kind 'Name'")
+        var namesByCode: [String: [String: String]] = [:]
+        // lowercased name → code → display label ("kind 'CODE'")
+        var codesByName: [String: [String: String]] = [:]
+        // lowercased name → original spelling (for the message)
+        var spelling: [String: String] = [:]
+
+        for term in allTerms() {
+            let lname = term.name.lowercased()
+            namesByCode[term.code, default: [:]][lname] = "\(term.kind) '\(term.name)'"
+            codesByName[lname, default: [:]][term.code] = "\(term.kind) '\(term.code)'"
+            spelling[lname] = term.name
         }
-        for (code, names) in classCodes where names.count > 1 {
+
+        for (code, labels) in namesByCode where labels.count > 1 {
+            let list = labels.keys.sorted().map { labels[$0]! }.joined(separator: ", ")
             findings.append(LintFinding(
-                .error, category: "duplicate-code",
-                message: "Class code '\(code)' used by multiple classes: \(names.joined(separator: ", "))"
+                .error, category: "ambiguous-code",
+                message: "Code '\(code)' is used by multiple terms: \(list)",
+                context: "AppleScript maps a code to one name when decompiling a raw Apple Event; multiple names are ambiguous"
             ))
         }
 
-        // Check property codes within each class
-        for cls in dictionary.classes.values {
-            let allProps = dictionary.allProperties(for: cls)
-            var propCodes: [String: [String]] = [:]
-            for prop in allProps {
-                propCodes[prop.code, default: []].append(prop.name)
-            }
-            for (code, names) in propCodes {
-                let unique = Array(Set(names))
-                if unique.count > 1 {
-                    findings.append(LintFinding(
-                        .error, category: "duplicate-code",
-                        message: "Property code '\(code)' maps to different names in class '\(cls.name)': \(unique.joined(separator: ", "))"
-                    ))
-                }
-            }
-        }
-
-        // Check enumerator codes across all enumerations
-        var enumCodes: [String: [(enumName: String, valueName: String)]] = [:]
-        for enumDef in dictionary.enumerations.values {
-            if enumDef.hidden { continue }
-            for enumerator in enumDef.enumerators {
-                enumCodes[enumerator.code, default: []].append((enumDef.name, enumerator.name))
-            }
-        }
-        for (code, entries) in enumCodes {
-            let uniqueNames = Set(entries.map(\.valueName))
-            if uniqueNames.count > 1 {
-                let detail = entries.map { "\($0.enumName).\($0.valueName)" }.joined(separator: ", ")
-                findings.append(LintFinding(
-                    .warning, category: "duplicate-code",
-                    message: "Enumerator code '\(code)' used with different names: \(detail)"
-                ))
-            }
+        // A name→code collision isn't only theoretical: the compiler picks one
+        // term and the others become unreachable by that name. BBEdit defines
+        // `document` as both a property and an element, and `document of text
+        // window 1` compiles to `get «class docu» of «class TxtW» 1` — the
+        // class wins, and the property can't be referred to by name at all.
+        for (name, labels) in codesByName where labels.count > 1 {
+            let list = labels.keys.sorted().map { labels[$0]! }.joined(separator: ", ")
+            findings.append(LintFinding(
+                .error, category: "ambiguous-term",
+                message: "Term '\(spelling[name] ?? name)' is used by multiple codes: \(list)",
+                context: "AppleScript maps a name to one code when compiling source; multiple codes are ambiguous"
+            ))
         }
 
         return findings
@@ -255,6 +327,9 @@ struct SDEFValidator {
                 for name in ScriptingDictionary.componentTypeNames(of: type) {
                     let lower = name.lowercased()
                     if builtinTypes.contains(lower) { continue }
+                    // Deprecated primitive names are reported by
+                    // checkDeprecatedTypeNames(), not as undefined types.
+                    if Self.deprecatedTypeNames[lower] != nil { continue }
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
@@ -362,43 +437,38 @@ struct SDEFValidator {
     private func checkNonStandardWellKnownTerms() -> [LintFinding] {
         var findings: [LintFinding] = []
 
-        // Gather every name each well-known code is given across the whole
-        // dictionary. This distinguishes a uniform non-standard choice (a
-        // deliberate, internally coherent convention) from an inconsistent one
-        // — the same code mapped to several names. AppleScript keeps a single
-        // code→name mapping per dictionary, so an inconsistent mapping makes
-        // its reverse lookup (decompiling a raw Apple Event) ambiguous.
-        // Keyed by code, then by lowercased name → original-cased name, so we
-        // dedup case-insensitively (AppleScript terms are case-insensitive)
-        // while preserving the dictionary's own spelling for the message.
+        // This check is only about a *consistent* non-standard choice: a
+        // standard Apple Event code given a single non-standard name throughout
+        // the dictionary (e.g. always calling `pnam` "title"). That's an
+        // internally coherent convention — unconventional, but it decompiles
+        // unambiguously — so it's reported as informational.
+        //
+        // The harmful case, where one code is mapped to several names, is
+        // ambiguous for AppleScript's decompiler and is reported as an error by
+        // checkAmbiguousCodeNames(). We skip those codes here to avoid
+        // double-reporting.
+        //
+        // Names are gathered case-insensitively (AppleScript terms are
+        // case-insensitive) while preserving the dictionary's own spelling.
         var namesByCode: [String: [String: String]] = [:]
         for cls in dictionary.classes.values {
-            for prop in dictionary.allProperties(for: cls) {
+            for prop in cls.properties {
                 guard Self.wellKnownCodes[prop.code] != nil else { continue }
                 namesByCode[prop.code, default: [:]][prop.name.lowercased()] = prop.name
             }
         }
 
         for cls in dictionary.classes.values {
-            let allProps = dictionary.allProperties(for: cls)
-            for prop in allProps {
+            for prop in cls.properties {
                 guard let expectedName = Self.wellKnownCodes[prop.code] else { continue }
                 if prop.name.lowercased() == expectedName.lowercased() { continue }
+                // Ambiguous mappings are handled (as errors) elsewhere.
+                if (namesByCode[prop.code]?.count ?? 0) > 1 { continue }
 
-                let distinctNames = namesByCode[prop.code] ?? [:]
-                if distinctNames.count > 1 {
-                    let nameList = distinctNames.values.sorted().joined(separator: ", ")
-                    findings.append(LintFinding(
-                        .error, category: "non-standard-term",
-                        message: "Property code '\(prop.code)' in class '\(cls.name)' uses name '\(prop.name)' instead of standard '\(expectedName)'",
-                        context: "Code '\(prop.code)' is mapped to multiple names in this dictionary (\(nameList)); AppleScript's reverse mapping when decompiling scripts is ambiguous"
-                    ))
-                } else {
-                    findings.append(LintFinding(
-                        .warning, category: "non-standard-term",
-                        message: "Property code '\(prop.code)' in class '\(cls.name)' uses name '\(prop.name)' instead of standard '\(expectedName)'"
-                    ))
-                }
+                findings.append(LintFinding(
+                    .info, category: "non-standard-term",
+                    message: "Property code '\(prop.code)' in class '\(cls.name)' uses name '\(prop.name)' instead of standard '\(expectedName)'"
+                ))
             }
         }
 
@@ -524,18 +594,11 @@ struct SDEFValidator {
             "property", "reference", "handler",
         ]
 
-        // Check for duplicate command codes
-        var commandCodes: [String: [String]] = [:]  // code → [command names]
-        for cmd in dictionary.commands.values {
-            if cmd.hidden { continue }
-            commandCodes[cmd.code, default: []].append(cmd.name)
-        }
-        for (code, names) in commandCodes where names.count > 1 {
-            findings.append(LintFinding(
-                .warning, category: "duplicate-command-code",
-                message: "Command code '\(code)' used by multiple commands: \(names.joined(separator: ", "))"
-            ))
-        }
+        // Cross-term code/name collisions — including command codes and
+        // parameter codes — are reported by checkTermCodeBijection(). The check
+        // below additionally catches a parameter code repeated *within* a single
+        // command (a literal duplicate parameter), which the bijection's
+        // identity dedup would otherwise pass over.
 
         // Check command parameter codes for duplicates within a command
         for cmd in dictionary.commands.values {
@@ -562,6 +625,9 @@ struct SDEFValidator {
                 for name in ScriptingDictionary.componentTypeNames(of: type) {
                     let lower = name.lowercased()
                     if builtinTypes.contains(lower) { continue }
+                    // Deprecated primitive names are reported by
+                    // checkDeprecatedTypeNames(), not as undefined types.
+                    if Self.deprecatedTypeNames[lower] != nil { continue }
                     if dictionary.findClass(name) != nil { continue }
                     if dictionary.findEnumeration(name) != nil { continue }
                     if dictionary.findRecordType(name) != nil { continue }
@@ -692,35 +758,99 @@ struct SDEFValidator {
 
     // MARK: - Code validity
 
-    /// Check that 4CC codes have exactly 4 bytes and command codes have 8.
+    /// Check that every code is the right length: four bytes for terms, eight
+    /// for command (verb) codes. The hexadecimal `0x…` spelling the spec allows
+    /// (e.g. `0x00000001`, used when a byte isn't printable) is decoded first,
+    /// so it isn't mistaken for an over-long literal.
     private func checkCodeValidity() -> [LintFinding] {
         var findings: [LintFinding] = []
 
+        func check(_ code: String, expected: Int, _ describe: () -> String) {
+            let canonical = ScriptingDictionary.canonicalCode(code)
+            guard let data = canonical.data(using: .macOSRoman), data.count != expected else { return }
+            findings.append(LintFinding(
+                .error, category: "invalid-code",
+                message: "\(describe()) has invalid code '\(code)' (\(data.count) bytes, expected \(expected))"
+            ))
+        }
+
         for cls in dictionary.classes.values {
-            if let data = cls.code.data(using: .macOSRoman), data.count != 4 {
-                findings.append(LintFinding(
-                    .error, category: "invalid-code",
-                    message: "Class '\(cls.name)' has invalid code '\(cls.code)' (\(data.count) bytes, expected 4)"
-                ))
-            }
+            check(cls.code, expected: 4) { "Class '\(cls.name)'" }
             for prop in cls.properties {
-                if let data = prop.code.data(using: .macOSRoman), data.count != 4 {
-                    findings.append(LintFinding(
-                        .error, category: "invalid-code",
-                        message: "Property '\(prop.name)' in class '\(cls.name)' has invalid code '\(prop.code)' (\(data.count) bytes, expected 4)"
-                    ))
+                check(prop.code, expected: 4) { "Property '\(prop.name)' in class '\(cls.name)'" }
+            }
+        }
+        for enumDef in dictionary.enumerations.values {
+            if let code = enumDef.code {
+                check(code, expected: 4) { "Enumeration '\(enumDef.name)'" }
+            }
+            for enumerator in enumDef.enumerators {
+                check(enumerator.code, expected: 4) { "Enumerator '\(enumerator.name)' in enumeration '\(enumDef.name)'" }
+            }
+        }
+        for valueType in dictionary.valueTypes.values {
+            check(valueType.code, expected: 4) { "Value type '\(valueType.name)'" }
+        }
+        for recordType in dictionary.recordTypes.values {
+            check(recordType.code, expected: 4) { "Record type '\(recordType.name)'" }
+            for prop in recordType.properties {
+                check(prop.code, expected: 4) { "Property '\(prop.name)' in record type '\(recordType.name)'" }
+            }
+        }
+        for cmd in dictionary.commands.values {
+            if cmd.hidden { continue }
+            check(cmd.code, expected: 8) { "Command '\(cmd.name)'" }
+            for param in cmd.parameters {
+                if let name = param.name, let code = param.code {
+                    check(code, expected: 4) { "Parameter '\(name)' of command '\(cmd.name)'" }
                 }
             }
         }
 
-        for cmd in dictionary.commands.values {
-            if cmd.hidden { continue }
-            if let data = cmd.code.data(using: .macOSRoman), data.count != 8 {
+        return findings
+    }
+
+    // MARK: - Deprecated primitive type names
+
+    /// Primitive types renamed in Mac OS X 10.4 (see sdef(5) History). The old
+    /// names are deprecated; a modern dictionary should use the new ones.
+    private static let deprecatedTypeNames: [String: String] = [
+        "string": "text",
+        "object": "specifier",
+        "location": "location specifier",
+    ]
+
+    private func checkDeprecatedTypeNames() -> [LintFinding] {
+        var findings: [LintFinding] = []
+
+        func check(_ type: String?, _ describe: () -> String) {
+            guard let type else { return }
+            for component in ScriptingDictionary.componentTypeNames(of: type) {
+                guard let modern = Self.deprecatedTypeNames[component.lowercased()] else { continue }
                 findings.append(LintFinding(
-                    .error, category: "invalid-code",
-                    message: "Command '\(cmd.name)' has invalid event code '\(cmd.code)' (\(data.count) bytes, expected 8)"
+                    .warning, category: "deprecated-type",
+                    message: "\(describe()) uses deprecated type '\(component)'; use '\(modern)' instead",
+                    context: "Primitive type renamed in Mac OS X 10.4"
                 ))
             }
+        }
+
+        for cls in dictionary.classes.values {
+            for prop in cls.properties {
+                check(prop.type) { "Property '\(prop.name)' in class '\(cls.name)'" }
+            }
+        }
+        for recordType in dictionary.recordTypes.values {
+            for prop in recordType.properties {
+                check(prop.type) { "Property '\(prop.name)' in record type '\(recordType.name)'" }
+            }
+        }
+        for cmd in dictionary.commands.values {
+            check(cmd.directParameter?.type) { "Direct parameter of command '\(cmd.name)'" }
+            for param in cmd.parameters {
+                check(param.type) { "Parameter '\(param.name ?? "(unnamed)")' of command '\(cmd.name)'" }
+            }
+            check(cmd.result?.type) { "Result of command '\(cmd.name)'" }
         }
 
         return findings
