@@ -43,6 +43,9 @@ struct AEQueryCommand: ParsableCommand {
     @Flag(name: .long, help: "Find all valid paths from the application root to the target")
     var findPaths: Bool = false
 
+    @Flag(name: .long, help: "List the current possible child elements and properties at the path")
+    var children: Bool = false
+
     @Option(name: .long, help: "Load SDEF from a file path instead of from the application bundle")
     var sdefFile: String? = nil
 
@@ -133,6 +136,12 @@ struct AEQueryCommand: ParsableCommand {
         if sdef {
             let info = try resolver.sdefInfo(for: query)
             print(formatSDEFInfo(info))
+            return
+        }
+
+        if children {
+            let info = try resolver.childrenInfo(for: query)
+            print(formatChildrenInfo(info, query: query))
             return
         }
 
@@ -248,6 +257,48 @@ func formatSDEFInfo(_ info: SDEFInfo) -> String {
         line += "  (in class \(prop.inClass))"
         return line
     }
+}
+
+func formatChildrenInfo(_ info: SDEFChildrenInfo, query: AEQuery) -> String {
+    var lines: [String] = []
+    let path = query.steps.isEmpty
+        ? "/\(query.appName)"
+        : "/\(query.appName)/" + query.steps.map(\.name).joined(separator: "/")
+
+    if let className = info.inClass {
+        lines.append("children at \(path) (class \(className))")
+    } else {
+        lines.append("children at \(path) (no class-typed node)")
+    }
+
+    lines.append("  elements:")
+    if info.elements.isEmpty {
+        lines.append("    (none)")
+    } else {
+        for elem in info.elements {
+            lines.append("    \(elem.stepName) '\(elem.code)' : \(elem.className)")
+        }
+    }
+
+    lines.append("  properties:")
+    if info.properties.isEmpty {
+        lines.append("    (none)")
+    } else {
+        for prop in info.properties {
+            var line = "    \(prop.name) '\(prop.code)'"
+            if let type = prop.type { line += " : \(type)" }
+            if let access = prop.access {
+                switch access {
+                case .readOnly: line += " [r]"
+                case .readWrite: line += " [rw]"
+                case .writeOnly: line += " [w]"
+                }
+            }
+            lines.append(line)
+        }
+    }
+
+    return lines.joined(separator: "\n")
 }
 
 extension FileHandle {
