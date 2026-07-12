@@ -21,6 +21,20 @@ brew install aelint
 swift build
 ```
 
+### Release builds
+
+Release binaries should be **universal** (arm64 + x86_64) so a single release runs
+on both Apple Silicon and Intel Macs:
+
+```
+Scripts/build-release.sh [VERSION]
+```
+
+This produces `aequery-<version>.tar.gz` and `aelint-<version>.tar.gz` in `release/`,
+each containing a universal binary, ready to upload as GitHub release assets. Building
+a single-architecture binary (e.g. plain `swift build -c release` on an Apple Silicon
+Mac) yields an arm64-only tool that fails with `bad CPU type in executable` on Intel Macs.
+
 ## Usage
 
 ```
