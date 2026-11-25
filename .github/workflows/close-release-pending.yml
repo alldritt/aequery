@@ -1,43 +1,123 @@
 name: Close Release Pending Issues
+
+# When a release is published, resolve the issues whose fix it ships:
+# issues labeled "Release Pending" plus the released tool's label.
+#
+#   aelint-vX.Y.Z tags -> AELint      vX.Y.Z tags -> AEQuery
+#
+# An issue labeled for both tools stays open until both have released; each
+# release records itself with a hidden marker comment. An issue that was
+# closed by hand while still labeled gets the release comment and loses the
+# label, but its closed state is left alone. Issues with no tool label are
+# skipped with a warning, so a release never closes the other tool's fixes.
+#
+# Run it by hand (Actions > Run workflow) with dry_run to preview what a
+# release would do without changing any issue.
+
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to act for (e.g. aelint-v0.5.0)
+        required: true
+      dry_run:
+        description: Only log what would happen
+        type: boolean
+        default: true
+
 permissions:
   contents: read
   issues: write
+
 jobs:
   close-issues:
     runs-on: ubuntu-latest
     steps:
-      - name: Close issues with "Release Pending" label
+      - name: Resolve "Release Pending" issues for this release's tool
         uses: actions/github-script@v9
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         with:
           script: |
-            const release = context.payload.release;
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: 'Release Pending',
-              state: 'open',
+            const PENDING = 'Release Pending';
+            const TOOLS = { AELint: /^aelint-v\d/, AEQuery: /^v\d/ };
+            const MARKER = /<!-- release-pending:(\w+) -->/g;
+            const { owner, repo } = context.repo;
+            const tag = process.env.TAG;
+            const dryRun = process.env.DRY_RUN === 'true';
+
+            const tool = Object.keys(TOOLS).find((t) => TOOLS[t].test(tag));
+            if (!tool) {
+              core.warning(`Tag ${tag} doesn't match a tool; no issues changed.`);
+              return;
+            }
+
+            const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            const link = `[${release.name || tag}](${release.html_url})`;
+            core.info(`${tag} releases ${tool}${dryRun ? ' (dry run)' : ''}`);
+
+            const act = async (what, fn) => {
+              core.info(`  ${what}`);
+              if (!dryRun) await fn();
+            };
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, labels: PENDING, state: 'all', per_page: 100,
             });
-            for (const issue of issues.data) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: `Resolved in [${release.tag_name}](${release.html_url}).`,
+
+            for (const issue of issues) {
+              if (issue.pull_request) continue;
+              const n = issue.number;
+              const labels = issue.labels.map((l) => l.name);
+              const needed = Object.keys(TOOLS).filter((t) => labels.includes(t));
+
+              if (needed.length === 0) {
+                core.warning(`#${n} has "${PENDING}" but no tool label (${Object.keys(TOOLS).join(' or ')}); skipped.`);
+                continue;
+              }
+              if (!needed.includes(tool)) {
+                core.info(`#${n}: waiting on ${needed.join(', ')}; not affected`);
+                continue;
+              }
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: n, per_page: 100,
               });
-              await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                name: 'Release Pending',
-              });
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'closed',
-                state_reason: 'completed',
-              });
+              const released = new Set([tool]);
+              for (const c of comments) {
+                for (const m of (c.body || '').matchAll(MARKER)) released.add(m[1]);
+              }
+              const waiting = needed.filter((t) => !released.has(t));
+              const marker = `<!-- release-pending:${tool} -->`;
+              core.info(`#${n} (${issue.state}): ${issue.title}`);
+
+              if (waiting.length > 0) {
+                if (comments.some((c) => (c.body || '').includes(marker))) {
+                  core.info(`  ${tool} already recorded; still waiting on ${waiting.join(', ')}`);
+                  continue;
+                }
+                await act(`comment: shipped in ${tag}, waiting on ${waiting.join(', ')}`, () =>
+                  github.rest.issues.createComment({
+                    owner, repo, issue_number: n,
+                    body: `The ${tool} part of this fix is in ${link}. This issue stays open until the ${waiting.join(' and ')} release.\n\n${marker}`,
+                  }));
+                continue;
+              }
+
+              await act(`comment: resolved in ${tag}`, () =>
+                github.rest.issues.createComment({
+                  owner, repo, issue_number: n,
+                  body: `Resolved in ${link}.\n\n${marker}`,
+                }));
+              await act(`remove label "${PENDING}"`, () =>
+                github.rest.issues.removeLabel({ owner, repo, issue_number: n, name: PENDING }));
+              if (issue.state === 'open') {
+                await act('close as completed', () =>
+                  github.rest.issues.update({
+                    owner, repo, issue_number: n, state: 'closed', state_reason: 'completed',
+                  }));
+              }
             }
